@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import JSZip from 'jszip';
 import {
-  ExportDocData, ExportLine, PackRow, amountInWords, cartonLabels, invoiceTotals, labelDescription, packageCbm,
+  ExportDocData, ExportLine, PackRow, amountInWords, carryDraft, cartonLabels, invoiceTotals, labelDescription, packageCbm,
   packingLines, packingMismatches, packingTotals, panFromGstin, partnerLines, unevenRows, usdInWords,
 } from './export-docs';
 import { invoiceSheet, packingSheet } from './export-docs-xlsx';
@@ -140,5 +140,26 @@ describe('excel layout', () => {
     expect(sheet).toContain('&lt;&gt;');
     expect(zip.file('xl/styles.xml')).toBeTruthy();
     expect(zip.file('xl/worksheets/sheet2.xml')).toBeTruthy();
+  });
+});
+
+describe('carrying a sales order draft over to its invoice', () => {
+  it('keeps the draft packing splits and edits, with invoice numbers and lines', () => {
+    const split = [{ ...PACKING[0], quantity: 15, unitsPerPackage: 5, labelDescription: 'Stool (Mango)' }, { ...PACKING[0], quantity: 5, unitsPerPackage: 5 }];
+    const draft: ExportDocData = {
+      ...DOC, invoiceNo: 'DRAFT', invoiceDate: '', isDraft: true, portOfDischarge: 'Savannah', woodSpecies: ['Mango'],
+      packing: [...split, PACKING[2], pack('GONE-SKU', 1, 1, '1 x 1 x 1', 1, 1)],
+    };
+    const out = carryDraft({ ...DOC, woodSpecies: [] }, draft);
+    expect(out.invoiceNo).toBe('INV262700015');
+    expect(out.isDraft).toBe(false);
+    expect(out.lines).toBe(DOC.lines);
+    expect(out.portOfDischarge).toBe('Savannah');
+    expect(out.woodSpecies).toEqual(['Mango']);
+    // split rows kept, invoice order kept, products not on the invoice dropped, missing ones fresh
+    expect(out.packing.map(p => [p.sku, p.quantity])).toEqual([
+      ['KUR-KCSL-KURI', 15], ['KUR-KCSL-KURI', 5], ['KUR-KRTL-KURI', 20], ['KUR-KTST-KURI', 21], ['KUR-KSCB-OWAX', 20], ['KURI-KBAR-0502', 40],
+    ]);
+    expect(out.packing[0].labelDescription).toBe('Stool (Mango)');
   });
 });

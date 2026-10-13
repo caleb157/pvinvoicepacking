@@ -10,6 +10,9 @@ const Packing = z.object({
 });
 const Kind = z.enum(['invoice', 'order']);
 
+// Signature / company stamp for the letters: a small PNG or JPEG data URL, or '' for none.
+const Image = z.string().max(400_000).regex(/^(data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+)?$/);
+
 const Body = z.discriminatedUnion('action', [
   z.object({ action: z.literal('init') }),
   z.object({ action: z.literal('packing'), skus: z.array(z.string().max(100)).max(500) }),
@@ -27,6 +30,7 @@ const Body = z.discriminatedUnion('action', [
     settings: z.object({
       lutArn: z.string().max(100), lutFrom: z.string().max(10), lutTo: z.string().max(10), adCode: z.string().max(50),
       signatoryName: z.string().max(100), signatoryTitle: z.string().max(100),
+      signatureImage: Image, stampImage: Image,
     }).partial(),
   }),
 ]);

@@ -10,6 +10,45 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { AppSettings, AppUser, UserRow, deleteUser, listUsers, saveSettings, saveUser } from '@/lib/export-docs-data';
 
+/** Reads an image file and shrinks it to at most 600 px wide as a PNG data URL (keeps transparency). */
+async function shrinkImage(file: File): Promise<string> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Not an image')); i.src = url; });
+    const scale = Math.min(1, 600 / img.naturalWidth);
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.naturalWidth * scale); c.height = Math.round(img.naturalHeight * scale);
+    c.getContext('2d')!.drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/png');
+  } finally { URL.revokeObjectURL(url); }
+}
+
+function ImagePick({ label, value, onChange, disabled }: { label: string; value: string; onChange: (v: string) => void; disabled: boolean }) {
+  return (
+    <div className="space-y-1">
+      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className="flex items-center gap-2">
+        <div className="h-16 w-36 rounded border bg-white flex items-center justify-center overflow-hidden">
+          {value ? <img src={value} alt={label} className="max-h-full max-w-full object-contain" /> : <span className="text-[11px] text-muted-foreground">none</span>}
+        </div>
+        {!disabled && (
+          <div className="flex flex-col gap-1">
+            <label className="text-xs underline cursor-pointer">
+              {value ? 'Replace' : 'Upload'}
+              <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={async e => {
+                const f = e.target.files?.[0]; e.target.value = '';
+                if (!f) return;
+                try { onChange(await shrinkImage(f)); } catch (err: any) { toast.error(err?.message || 'Could not read the image'); }
+              }} />
+            </label>
+            {value && <button type="button" className="text-xs underline text-left text-muted-foreground" onClick={() => onChange('')}>Remove</button>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 interface Draft { id: string | null; email: string; name: string; is_admin: boolean; disabled: boolean; password: string }
 const blank: Draft = { id: null, email: '', name: '', is_admin: false, disabled: false, password: '' };
 
@@ -113,6 +152,11 @@ export default function Settings({ user, settings, onSaved }: { user: AppUser; s
                 <Field label="Signatory name" value={form.signatoryName} onChange={signatoryName => set({ signatoryName })} />
                 <Field label="Signatory title" value={form.signatoryTitle} onChange={signatoryTitle => set({ signatoryTitle })} />
               </div>
+              <div className="flex flex-wrap gap-6">
+                <ImagePick label="Signature (printed on the letters)" value={form.signatureImage || ''} onChange={signatureImage => set({ signatureImage })} disabled={!user.admin} />
+                <ImagePick label="Company stamp" value={form.stampImage || ''} onChange={stampImage => set({ stampImage })} disabled={!user.admin} />
+              </div>
+              <p className="text-[11px] text-muted-foreground">Use PNGs with a transparent background for the cleanest print. Leave both empty to sign the letters by hand.</p>
               {user.admin
                 ? <Button size="sm" className="gap-1.5" onClick={submit} disabled={busy}>{busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} Save</Button>
                 : <p className="text-xs text-muted-foreground">Only admins can change these.</p>}

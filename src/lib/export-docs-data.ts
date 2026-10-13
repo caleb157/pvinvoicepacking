@@ -85,6 +85,7 @@ export interface ShipmentSummary {
 }
 export interface AppSettings {
   lutArn: string; lutFrom: string; lutTo: string; adCode: string; signatoryName: string; signatoryTitle: string;
+  signatureImage?: string; stampImage?: string; // PNG/JPEG data URLs printed on the letters
 }
 export interface PackingProfile {
   sku: string; units_per_package: number | null; package_dims_in: string | null; package_kind: string | null;
@@ -181,8 +182,19 @@ export const DEFAULT_SHIPPING: ShippingDefaults = {
   portOfLoading: 'Jodhpur, India', termsOfDelivery: '',
 };
 
+/**
+ * The customer SKU among a product's Odoo variant tags: a tag starting "SKU:" (the prefix is
+ * dropped), else the product's only tag. With several tags and none marked "SKU:", there is no
+ * customer SKU, so an unrelated tag never prints as one.
+ */
+export function customerSku(tags: string[]): string {
+  const marked = tags.map(t => /^\s*SKU\s*[:\-]\s*(.+)$/i.exec(t)?.[1]?.trim()).find(Boolean);
+  if (marked) return marked;
+  return tags.length === 1 ? tags[0].trim() : '';
+}
+
 /** Product code on the documents: the customer SKU from the Odoo variant tags, else ours. */
-export const productCode = (l: Pick<SourceLine, 'customer_skus' | 'internal_sku'>) => l.customer_skus[0] || l.internal_sku;
+export const productCode = (l: Pick<SourceLine, 'customer_skus' | 'internal_sku'>) => customerSku(l.customer_skus) || l.internal_sku;
 
 export function docFromSource(
   src: SourceDoc,
@@ -210,7 +222,7 @@ export function docFromSource(
     uom: !l.uom || /^units?$/i.test(l.uom) ? 'Units' : l.uom, fobPriceUsd: l.price_unit, igstRatePct: l.gst_rate ?? 0,
   }));
   const packing: PackRow[] = goods.map((l, i) => packRowFromLine(lines[i], {
-    customerSku: l.customer_skus[0] || '', unitGrossKg: l.weight_kg || 0, remembered: opts.remembered[l.internal_sku] ?? null,
+    customerSku: customerSku(l.customer_skus), unitGrossKg: l.weight_kg || 0, remembered: opts.remembered[l.internal_sku] ?? null,
   }));
   return {
     invoiceNo: isDraft ? 'DRAFT' : src.name, invoiceDate: isDraft ? '' : (src.date || ''), exporterRef: panFromGstin(shipper.gstNumber),

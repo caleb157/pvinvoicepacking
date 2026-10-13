@@ -352,3 +352,35 @@ export function invoiceBanner(doc: Pick<ExportDocData, 'taxMode' | 'lutArn'>): s
 }
 
 export const safeFileName = (s: string) => s.replace(/[\\/:*?"<>|]+/g, '-').trim();
+
+/**
+ * Brings the work done on a sales order draft over to the document built from its posted
+ * invoice: the draft's packing rows (splits, cartons, weights, label names) for products that
+ * are on the invoice, the edited parties and shipping fields, and the wood species. Invoice
+ * number, date, lines and prices always come from the invoice. Products only on the invoice
+ * keep their fresh rows; quantity differences show up as packing warnings.
+ */
+export function carryDraft(invoice: ExportDocData, draft: ExportDocData): ExportDocData {
+  const key = (r: { internalSku: string; sku: string }) => r.internalSku || r.sku;
+  const fresh = new Map(invoice.packing.map(r => [key(r), r]));
+  const order = [...new Set(invoice.lines.map(key))];
+  const packing = order.flatMap(k => {
+    const rows = draft.packing.filter(r => key(r) === k);
+    const f = fresh.get(k);
+    if (!rows.length) return f ? [f] : [];
+    return rows.map(r => (f ? { ...r, sku: f.sku, customerSku: f.customerSku, description: f.description, unitGrossKg: f.unitGrossKg || r.unitGrossKg } : r));
+  });
+  return {
+    ...invoice,
+    consignee: draft.consignee, buyer: draft.buyer,
+    buyerOrderDate: draft.buyerOrderDate || invoice.buyerOrderDate,
+    billOfLading: draft.billOfLading || invoice.billOfLading,
+    preCarriageBy: draft.preCarriageBy, vesselFlightNo: draft.vesselFlightNo, portOfDischarge: draft.portOfDischarge,
+    countryOfOrigin: draft.countryOfOrigin, countryOfFinalDestination: draft.countryOfFinalDestination,
+    placeOfReceipt: draft.placeOfReceipt, portOfLoading: draft.portOfLoading, finalDestination: draft.finalDestination,
+    termsOfDelivery: draft.termsOfDelivery, handlingInformation: draft.handlingInformation,
+    taxMode: draft.taxMode, lutArn: draft.lutArn || invoice.lutArn,
+    woodSpecies: draft.woodSpecies?.length ? draft.woodSpecies : invoice.woodSpecies,
+    packing,
+  };
+}

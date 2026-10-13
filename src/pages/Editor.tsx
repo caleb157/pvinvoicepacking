@@ -16,7 +16,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
-  ExportDocData, ExportLine, ICEGATE_RATES_URL, PackRow, TaxMode, amountInWords, grossFromUnits, invoiceLine, invoiceTotals,
+  ExportDocData, ExportLine, ICEGATE_RATES_URL, PackRow, TaxMode, amountInWords, carryDraft, grossFromUnits, invoiceLine, invoiceTotals,
   packingLines, packingMismatches, packingTotals, safeFileName, unevenRows,
 } from '@/lib/export-docs';
 import {
@@ -126,10 +126,19 @@ export default function Editor({ settings }: { settings: AppSettings | null }) {
   const buildFromOdoo = async (k: SourceKind, id: number) => {
     const src = await getSource(k, id);
     const remembered = await rememberedPacking(src.lines.map(l => l.internal_sku));
-    setDoc(docFromSource(src, {
+    let built = docFromSource(src, {
       contact: prefs.contact, remembered, shipping: prefs.shipping, taxMode: prefs.taxMode, lutArn: settings?.lutArn ?? '',
       rate: rateNum, notificationNo: rate.notificationNo, signatoryName: prefs.signatory || settings?.signatoryName || '',
-    }));
+    });
+    // A posted invoice whose sales order has a saved draft: offer the draft's packing and edits.
+    if (k === 'invoice' && src.sale_order) {
+      const draft = await getShipment('order', src.sale_order).catch(() => null);
+      if (draft && window.confirm(`${src.sale_order} has a saved draft (by ${draft.updated_by || 'someone'} on ${String(draft.updated_at).slice(0, 10)}). Use its packing list, addresses and shipping details for ${src.name}?`)) {
+        built = carryDraft(built, draft.payload);
+        toast.success(`Carried the ${src.sale_order} draft over. Check the packing warnings for any quantity changes.`);
+      }
+    }
+    setDoc(built);
     setSource({ kind: k, name: src.name, odooId: src.id });
     setSavedNote(null);
     setSavedKey(null);
@@ -275,7 +284,10 @@ export default function Editor({ settings }: { settings: AppSettings | null }) {
   };
 
   const letterBlock = doc ? notReady(doc) : '';
-  const sig = { name: settings?.signatoryName || doc?.signatoryName || '', title: settings?.signatoryTitle || 'Director' };
+  const sig = {
+    name: settings?.signatoryName || doc?.signatoryName || '', title: settings?.signatoryTitle || 'Director',
+    signatureImage: settings?.signatureImage || '', stampImage: settings?.stampImage || '',
+  };
 
   const letter = async (what: 'labels' | 'nondg' | 'evd' | 'wood') => {
     if (!doc || letterBlock) return;

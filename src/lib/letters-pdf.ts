@@ -10,7 +10,7 @@ import { ExportDocData } from './export-docs';
 import { DECLARATIONS, HDFC, RemitRow, dateOfExport, defaultHdfc, hdfcDate, sbRows, utilisation } from './hdfc';
 import { LETTERHEAD, evdTerms, isRelatedBuyer, labelData, letterDate, nonDgRows, woodText } from './letters';
 
-export interface Signatory { name: string; title: string }
+export interface Signatory { name: string; title: string; signatureImage?: string; stampImage?: string }
 
 const F = 'Montserrat';
 let assets: Promise<{ regular: string; bold: string; logo: string }> | null = null;
@@ -77,6 +77,22 @@ function para(pdf: jsPDF, text: string, y: number, opts: { bold?: boolean; size?
   return y + lines.length * lh + (opts.gap ?? 4);
 }
 
+/** The signature (and company stamp beside it) from Settings, drawn in the space above the signatory line. */
+function ink(pdf: jsPDF, sig: Signatory, x: number, top: number, height: number) {
+  const draw = (img: string | undefined, at: number, maxW: number) => {
+    if (!img) return 0;
+    try {
+      const p = pdf.getImageProperties(img);
+      const h = Math.min(height, (maxW * p.height) / p.width);
+      const w = (h * p.width) / p.height;
+      pdf.addImage(img, p.fileType, at, top + (height - h) / 2, w, h);
+      return w;
+    } catch { return 0; }
+  };
+  const w = draw(sig.signatureImage, x, 45);
+  draw(sig.stampImage, x + (w ? w + 4 : 0), 32);
+}
+
 function signature(pdf: jsPDF, y: number, lines: string[]) {
   pdf.setFont(F, 'bold'); pdf.setFontSize(10.5);
   lines.forEach((l, i) => pdf.text(l, LM, y + i * 6));
@@ -102,6 +118,7 @@ export async function nonDgPdf(doc: ExportDocData, sig: Signatory): Promise<Blob
   });
   y = (pdf as any).lastAutoTable.finalY + 12;
   signature(pdf, y, [`FOR ${doc.shipper.name || 'Parable Ventures Pvt Ltd'}`, '', '', '', 'Auth. Signatory']);
+  ink(pdf, sig, LM, y + 2, 17);
   return pdf.output('blob');
 }
 
@@ -140,6 +157,7 @@ export async function evdPdf(doc: ExportDocData, sig: Signatory): Promise<Blob> 
   pdf.setFont(F, 'normal'); pdf.text('FOR: ', PW / 2, y); pdf.setFont(F, 'bold'); pdf.text('PARABLE VENTURES PVT LTD', PW / 2 + 10, y);
   y += 8;
   pdf.setFont(F, 'normal'); pdf.text(`DATE: ${letterDate(doc.invoiceDate)}`, LM, y);
+  ink(pdf, sig, PW / 2, y + 1, 13);
   pdf.text('AUTHORITY SIGN.', PW / 2, y + 18);
   if (sig.name) pdf.text(`${sig.name}, ${sig.title}`, PW / 2, y + 23);
   return pdf.output('blob');
@@ -154,6 +172,7 @@ export async function woodPdf(doc: ExportDocData, sig: Signatory): Promise<Blob>
   y = para(pdf, 'TO WHOMSOEVER IT MAY CONCERN', y, { bold: true, size: 12, align: 'center', gap: 14 });
   y = para(pdf, woodText(doc), y, { align: 'justify', size: 11, gap: 24 });
   y = para(pdf, 'Thanking you', y, { size: 11, gap: 26 });
+  ink(pdf, sig, LM, y - 23, 17);
   y = para(pdf, 'Authorized Signatory.', y, { size: 11, gap: 1 });
   if (sig.name) y = para(pdf, `${sig.name}, ${sig.title}`, y, { size: 11, gap: 1 });
   para(pdf, 'Parable Ventures Pvt Ltd', y, { size: 11, bold: true });
@@ -294,6 +313,7 @@ export async function hdfcPdf(doc: ExportDocData, x: HdfcExtras): Promise<Blob> 
   y += 4;
   pdf.setFont(F, 'bold'); pdf.setFontSize(9.5);
   pdf.text(`For ${doc.shipper.name || 'Parable Ventures Private Limited'}`, LM, y);
+  ink(pdf, x.sig, LM, y + 2, 17);
   y += 22;
   pdf.setLineWidth(0.3); pdf.line(LM, y, LM + 70, y);
   pdf.setFont(F, 'normal'); pdf.setFontSize(8.5);

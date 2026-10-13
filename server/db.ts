@@ -15,9 +15,11 @@ const rowsOf = (r: unknown) => r as any[];
 
 export interface AppSettings {
   lutArn: string; lutFrom: string; lutTo: string; adCode: string; signatoryName: string; signatoryTitle: string;
+  signatureImage: string; stampImage: string; // PNG/JPEG data URLs, '' for none
 }
 export const DEFAULT_SETTINGS: AppSettings = {
   lutArn: '', lutFrom: '', lutTo: '', adCode: '', signatoryName: 'Parker Hoye', signatoryTitle: 'Director',
+  signatureImage: '', stampImage: '',
 };
 
 export async function getSettings(): Promise<AppSettings> {
