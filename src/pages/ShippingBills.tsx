@@ -1,8 +1,8 @@
 // Shipping bill tracker: one row per shipping bill, edited in place. "Add from Odoo invoice"
 // (or the row's link button) fills invoice no/date, consignee, buyer, FOB, freight and
 // insurance from a posted Odoo invoice; everything else is typed by hand.
-import { useMemo, useState } from 'react';
-import { AlertTriangle, Link2, Loader2, Plus } from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
+import { AlertTriangle, FileUp, Link2, Loader2, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { OdooInvoicePicker } from '@/components/OdooInvoicePicker';
 import { Col, TrackerGrid, useRows } from '@/components/TrackerGrid';
@@ -74,6 +74,43 @@ export default function ShippingBills() {
     return [...seen].filter(([, n]) => n > 1).map(([k]) => k);
   }, [rows]);
 
+  const file = useRef<HTMLInputElement>(null);
+  const norm = (v: unknown) => String(v ?? '').replace(/\s+/g, '').toUpperCase();
+
+  /** Reads ICEGATE shipping bill PDFs: fills the empty fields of the invoice's row, or adds a new row. */
+  const readPdfs = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setBusy(true);
+    const { pdfRows } = await import('@/lib/remittance-pdf');
+    const { parseShippingBill, trackerFromBill, fillEmpty } = await import('@/lib/shipping-bill-pdf');
+    let current = rows ?? [];
+    for (const f of Array.from(files)) {
+      try {
+        const p = parseShippingBill(await pdfRows(f));
+        if (!p.sb_number) { toast.error(`${f.name}: couldn't find a shipping bill number. Add it by hand.`); continue; }
+        if (current.some(r => norm(r.sb_number) === norm(p.sb_number))) { toast.warning(`SB ${p.sb_number} is already in the tracker; skipped.`); continue; }
+        const { row, note } = trackerFromBill(p);
+        const match = p.invoice_no ? current.find(r => norm(r.invoice_no) === norm(p.invoice_no) && !r.sb_number) : undefined;
+        const comment = `Read from ${f.name}${note ? ` (${note})` : ''}${p.ad_code ? `, AD code ${p.ad_code}` : ''}`;
+        let saved;
+        if (match) {
+          const changes = fillEmpty(match, row);
+          if (!match.comments) changes.comments = comment;
+          saved = await updateRow('shipping_bills', match.id, changes);
+          current = current.map(r => (r.id === match.id && saved ? saved : r));
+        } else {
+          saved = await insertRow('shipping_bills', { ...row, bank_status: 'Not Submitted', status: 'In Progress', comments: comment });
+          current = [saved, ...current];
+        }
+        setRows(() => current);
+        const missing = Object.entries(row).filter(([, v]) => v == null || v === '').map(([k]) => k.replace(/_/g, ' '));
+        toast.success(`SB ${p.sb_number}${match ? ` added to the ${p.invoice_no} row (fields you typed were kept)` : ' added'}.${missing.length ? ` Not found: ${missing.join(', ')}.` : ''}`);
+      } catch (e: any) { toast.error(`${f.name}: ${e?.message || 'could not read'}`); }
+    }
+    setBusy(false);
+    if (file.current) file.current.value = '';
+  };
+
   const addBlank = async () => {
     setBusy(true);
     try { const r = await insertRow('shipping_bills', { bank_status: 'Not Submitted', status: 'In Progress', currency: 'USD' }); setRows(rs => [r, ...rs]); }
@@ -109,6 +146,8 @@ export default function ShippingBills() {
         {adding === 'odoo'
           ? <OdooInvoicePicker onPick={s => fromOdoo(s.id)} onClose={() => setAdding(null)} placeholder="Pick the Odoo invoice for this shipping bill" />
           : <Button size="sm" className="h-8 gap-1.5" onClick={() => setAdding('odoo')} disabled={!rows}><Plus className="h-3.5 w-3.5" /> Add from Odoo invoice</Button>}
+        <input ref={file} type="file" accept="application/pdf" multiple className="hidden" onChange={e => readPdfs(e.target.files)} />
+        <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => file.current?.click()} disabled={!rows || busy}><FileUp className="h-3.5 w-3.5" /> Read shipping bill PDF</Button>
         <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={addBlank} disabled={!rows || busy}><Plus className="h-3.5 w-3.5" /> Blank row</Button>
       </div>
       {linking && (

@@ -16,8 +16,8 @@ export function isoDate(s: string): string {
   const t = s.trim();
   let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
   if (m) return t;
-  m = /^(\d{1,2})[-/ .]([A-Za-z]{3})[A-Za-z]*[-/ .,]+(\d{4})$/.exec(t);
-  if (m && MONTHS[m[2].toLowerCase()]) return `${m[3]}-${MONTHS[m[2].toLowerCase()]}-${m[1].padStart(2, '0')}`;
+  m = /^(\d{1,2})[-/ .]([A-Za-z]{3})[A-Za-z]*[-/ .,]+(\d{4}|\d{2})$/.exec(t);
+  if (m && MONTHS[m[2].toLowerCase()]) return `${m[3].length === 2 ? `20${m[3]}` : m[3]}-${MONTHS[m[2].toLowerCase()]}-${m[1].padStart(2, '0')}`;
   m = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/.exec(t);
   if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
   return '';
