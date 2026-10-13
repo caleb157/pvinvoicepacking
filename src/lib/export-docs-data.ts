@@ -220,6 +220,6 @@ export function docFromSource(
     exchangeRate: opts.rate, notificationNo: opts.notificationNo,
     shippingInr: Math.round(charges * opts.rate * 100) / 100, shippingIgstInr: 0,
     signatoryCompany: shipper.name, signatoryName: opts.signatoryName,
-    lines, packing,
+    lines, packing, incoterm, paymentTerms: src.payment_terms || '', woodSpecies: [],
   };
 }

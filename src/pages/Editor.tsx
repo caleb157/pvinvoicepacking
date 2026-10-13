@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle, ArrowDown, ArrowUp, Copy, Download, ExternalLink, FileSpreadsheet, FileText, History, Loader2, RefreshCw,
-  Save, Search, Trash2,
+  Save, Search, Tag, Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Field, PartyEditor } from '@/components/PartyEditor';
@@ -22,6 +22,7 @@ import {
   ApiError, AppSettings, DEFAULT_SHIPPING, ShipmentSummary, ShippingDefaults, SourceKind, SourceSummary,
   docFromSource, getShipment, getSource, listSources, loadInit, rememberedPacking, saveCustomsRate, saveShipment,
 } from '@/lib/export-docs-data';
+import { WOOD_SPECIES, notReady } from '@/lib/letters';
 
 export const MISSING_TABLES_MSG = 'The app database is not set up yet. Run sql/setup.sql in the Neon SQL editor, then reload.';
 export const isMissingTable = (e: unknown) => e instanceof ApiError && e.missingTables;
@@ -271,6 +272,27 @@ export default function Editor({ settings }: { settings: AppSettings | null }) {
       toast.error(e?.message || 'Could not generate the file');
     } finally { setBusy(false); }
   };
+
+  const letterBlock = doc ? notReady(doc) : '';
+  const sig = { name: settings?.signatoryName || doc?.signatoryName || '', title: settings?.signatoryTitle || 'Director' };
+
+  const letter = async (what: 'labels' | 'nondg' | 'evd' | 'wood') => {
+    if (!doc || letterBlock) return;
+    const d = clean(doc);
+    setBusy(true);
+    try {
+      const L = await import('@/lib/letters-pdf');
+      const base = safeFileName(d.invoiceNo);
+      if (what === 'labels') download(await L.labelsPdf(d), `Carton Labels - ${base}.pdf`);
+      if (what === 'nondg') download(await L.nonDgPdf(d, sig), `Non-DG Letter - ${base}.pdf`);
+      if (what === 'evd') download(await L.evdPdf(d, sig), `Export Value Declaration - ${base}.pdf`);
+      if (what === 'wood') download(await L.woodPdf(d, sig), `Wooden Declaration - ${base}.pdf`);
+      await save(d, true);
+    } catch (e: any) {
+      toast.error(e?.message || 'Could not make the PDF');
+    } finally { setBusy(false); }
+  };
+
 
   return (
     <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-4">
@@ -583,6 +605,37 @@ export default function Editor({ settings }: { settings: AppSettings | null }) {
                 <Button size="sm" variant="outline" className="gap-1.5" disabled={busy} onClick={() => generate('packing-pdf')}>
                   {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />} Packing list PDF
                 </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">Labels and letters</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              {letterBlock ? (
+                <p className="text-xs text-warning flex gap-1.5"><AlertTriangle className="h-3.5 w-3.5 shrink-0" />{letterBlock}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {packTotals.packages} A5 labels (one per carton), and the Non-DG certificate, Export Value Declaration and Wooden Declaration on the
+                  letterhead, all from this invoice and packing list. Signed as {sig.name}, {sig.title}.
+                </p>
+              )}
+              <div className="flex flex-wrap items-center gap-3 text-xs">
+                <span className="text-muted-foreground">Wood used:</span>
+                {WOOD_SPECIES.map(w => (
+                  <label key={w} className="flex items-center gap-1.5">
+                    <Checkbox checked={(doc.woodSpecies ?? []).includes(w)}
+                      onCheckedChange={v => patch({ woodSpecies: WOOD_SPECIES.filter(x => (x === w ? !!v : (doc.woodSpecies ?? []).includes(x))) })} />
+                    {w}
+                  </label>
+                ))}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" className="gap-1.5" disabled={busy || !!letterBlock} onClick={() => letter('labels')}><Tag className="h-3.5 w-3.5" /> Carton labels (A5)</Button>
+                <Button size="sm" variant="outline" className="gap-1.5" disabled={busy || !!letterBlock} onClick={() => letter('nondg')}><FileText className="h-3.5 w-3.5" /> Non-DG letter</Button>
+                <Button size="sm" variant="outline" className="gap-1.5" disabled={busy || !!letterBlock} onClick={() => letter('evd')}><FileText className="h-3.5 w-3.5" /> Export Value Declaration</Button>
+                <Button size="sm" variant="outline" className="gap-1.5" disabled={busy || !!letterBlock || !(doc.woodSpecies ?? []).length} onClick={() => letter('wood')}
+                  title={(doc.woodSpecies ?? []).length ? undefined : 'Tick the wood used first'}><FileText className="h-3.5 w-3.5" /> Wooden Declaration</Button>
               </div>
             </CardContent>
           </Card>

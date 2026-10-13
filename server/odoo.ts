@@ -8,16 +8,29 @@
 //   searchPartners: customers and their delivery addresses (consignee / buyer pickers)
 
 const env = (k: string, d = '') => (process.env[k] ?? d).trim();
-const ODOO_URL = () => env('ODOO_URL').replace(/\/+$/, '');
+/** Base address only: adds https:// when missing and drops a pasted /odoo or /web path. */
+export function odooBase(raw: string): string {
+  let u = raw.trim();
+  if (!u) return '';
+  if (!/^https?:\/\//i.test(u)) u = `https://${u}`;
+  try { const x = new URL(u); return `${x.protocol}//${x.host}`; } catch { return u.replace(/\/+$/, ''); }
+}
+const ODOO_URL = () => odooBase(env('ODOO_URL'));
 const ODOO_DB = () => env('ODOO_DB', 'parableventures');
 
 let rpcId = 0;
 async function rpc(service: string, method: string, args: unknown[]) {
   if (!ODOO_URL()) throw new Error('ODOO_URL is not set in the Vercel environment variables.');
-  const res = await fetch(`${ODOO_URL()}/jsonrpc`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', method: 'call', id: ++rpcId, params: { service, method, args } }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${ODOO_URL()}/jsonrpc`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'call', id: ++rpcId, params: { service, method, args } }),
+    });
+  } catch (e: any) {
+    const why = e?.cause?.code || e?.cause?.message || e?.message || 'network error';
+    throw new Error(`Could not reach Odoo at ${ODOO_URL()} (${why}). Check ODOO_URL in Vercel, e.g. https://yourcompany.odoo.com`);
+  }
   if (!res.ok) throw new Error(`Odoo HTTP ${res.status}`);
   const data: any = await res.json();
   if (data.error) throw new Error(data.error?.data?.message || data.error?.message || 'Odoo error');

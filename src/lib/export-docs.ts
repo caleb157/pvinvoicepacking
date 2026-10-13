@@ -88,6 +88,9 @@ export interface ExportDocData {
   signatoryName: string;
   lines: ExportLine[];
   packing: PackRow[];
+  incoterm?: string;             // "FOB" (from Odoo), for the Export Value Declaration
+  paymentTerms?: string;         // Odoo payment terms, for the Export Value Declaration
+  woodSpecies?: string[];        // for the Wooden Declaration, e.g. ['Mango', 'Acacia']
 }
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;

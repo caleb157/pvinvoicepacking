@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanRow } from './db';
-import { chargeKind, igstOf, trackerFields } from './odoo';
+import { chargeKind, igstOf, odooBase, trackerFields } from './odoo';
 import { makeToken, readToken } from './session';
 import { checkPassword, hashPassword } from './users';
 
@@ -24,6 +24,15 @@ describe('passwords', () => {
     expect(checkPassword('correct horse', h)).toBe(true);
     expect(checkPassword('wrong', h)).toBe(false);
     expect(checkPassword('x', 'garbage')).toBe(false);
+  });
+});
+
+describe('odoo address', () => {
+  it('keeps only the base address', () => {
+    expect(odooBase('parable.odoo.com')).toBe('https://parable.odoo.com');
+    expect(odooBase('https://parable.odoo.com/odoo/action-123')).toBe('https://parable.odoo.com');
+    expect(odooBase('https://parable.odoo.com/web#id=5 ')).toBe('https://parable.odoo.com');
+    expect(odooBase('')).toBe('');
   });
 });
 

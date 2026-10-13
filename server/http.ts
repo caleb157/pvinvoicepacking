@@ -4,7 +4,12 @@ import { stillActive } from './users.js';
 export const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers } });
 
-export const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+export function errMsg(e: unknown): string {
+  const m = e instanceof Error ? e.message : String(e);
+  // Odoo errors already name Odoo; a bare "fetch failed" left here is the database connection.
+  if (/fetch failed|error connecting to database/i.test(m)) return `Could not reach the database (${m}). Check that the Neon database is connected to this project in Vercel → Storage, then redeploy.`;
+  return m;
+}
 
 export const isMissingTable = (e: any) => e?.code === '42P01' || /relation .* does not exist/i.test(String(e?.message));
 export const MISSING_TABLES_MSG = 'The app database is not set up yet. Run sql/setup.sql in the Neon SQL editor, then reload.';
