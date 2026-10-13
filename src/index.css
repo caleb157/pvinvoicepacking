@@ -1,0 +1,135 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Graphite & Emerald — light. Airy neutral canvas, near-black ink,
+       emerald primary reserved for actions and key data. */
+    --background: 0 0% 100%;
+    --foreground: 222 25% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 25% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 25% 10%;
+    --primary: 158 74% 38%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 94%;
+    --secondary-foreground: 222 25% 14%;
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 42%;
+    --accent: 220 14% 93%;
+    --accent-foreground: 222 25% 14%;
+    --destructive: 0 72% 46%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 13% 88%;
+    --input: 220 13% 88%;
+    --ring: 158 74% 38%;
+    --radius: 0.5rem;
+    /* Status colors. Every status badge, alert, icon and highlight in the app
+       uses these (text-success, bg-warning/15, border-destructive/30, ...)
+       instead of raw Tailwind palette colors, so light and dark stay in step.
+       Light values are dark enough to read as text on white. */
+    --success: 158 72% 33%;
+    --success-foreground: 0 0% 100%;
+    --warning: 30 90% 40%;
+    --warning-foreground: 0 0% 100%;
+    /* Neutral information (sent, ready, links to other records). */
+    --info: 214 78% 46%;
+    --info-foreground: 0 0% 100%;
+    /* A second accent for categories that need telling apart from info
+       (urgent, viewed, quoted, estimated from a photo). */
+    --highlight: 262 52% 52%;
+    --highlight-foreground: 0 0% 100%;
+  }
+
+  /* Parker Mode — graphite dark with emerald accent. */
+  .dark {
+    --background: 220 15% 7%;
+    --foreground: 210 20% 94%;
+    --card: 220 14% 10%;
+    --card-foreground: 210 20% 94%;
+    --popover: 220 14% 10%;
+    --popover-foreground: 210 20% 94%;
+    --primary: 158 68% 48%;
+    --primary-foreground: 220 15% 7%;
+    --secondary: 220 14% 14%;
+    --secondary-foreground: 210 20% 94%;
+    --muted: 220 14% 13%;
+    --muted-foreground: 220 10% 62%;
+    --accent: 220 14% 16%;
+    --accent-foreground: 210 20% 94%;
+    --destructive: 0 65% 55%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 220 12% 18%;
+    --input: 220 12% 18%;
+    --ring: 158 68% 48%;
+    --success: 158 68% 48%;
+    --success-foreground: 220 15% 7%;
+    --warning: 34 92% 56%;
+    --warning-foreground: 220 15% 7%;
+    --info: 212 85% 66%;
+    --info-foreground: 220 15% 7%;
+    --highlight: 262 75% 74%;
+    --highlight-foreground: 220 15% 7%;
+  }
+
+  /* Native controls (date pickers, select menus, scrollbars) follow the theme. */
+  :root { color-scheme: light; }
+  .dark { color-scheme: dark; }
+
+  .dark body,
+  .dark input,
+  .dark textarea,
+  .dark select,
+  .dark button {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: -0.005em;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    letter-spacing: -0.015em;
+    font-weight: 600;
+  }
+
+  /* Hide number input spinner arrows globally — accept any typed value. */
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+}
+
+@layer components {
+  /* One page title style (Inter, 20px semibold), as in HQ. */
+  .page-title {
+    @apply text-xl font-semibold tracking-tight;
+  }
+}
+
+/* iOS Safari zooms in when a field under 16px gets focus; give phone fields 16px. */
+@media (max-width: 767px) and (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
