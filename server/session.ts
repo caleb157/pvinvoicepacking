@@ -1,11 +1,12 @@
 // Sign-in cookie: a small signed token (HMAC-SHA256 with SESSION_SECRET) holding the
-// Odoo user's id and name. No passwords are kept; the Odoo calls use the app's API key.
+// app user's id, email, name and admin flag.
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 export const COOKIE = 'ip_session';
 const MAX_AGE_S = 30 * 24 * 3600;
 
-export interface Session { uid: number; name: string; login: string; exp: number }
+export interface SessionUser { uid: string; email: string; name: string; admin: boolean }
+export interface Session extends SessionUser { exp: number }
 
 function secret() {
   const s = process.env.SESSION_SECRET ?? '';
@@ -15,7 +16,7 @@ function secret() {
 const b64 = (s: string) => Buffer.from(s).toString('base64url');
 const sign = (body: string, key: string) => createHmac('sha256', key).update(body).digest('base64url');
 
-export function makeToken(user: { uid: number; name: string; login: string }, now = Date.now(), key = secret()): string {
+export function makeToken(user: SessionUser, now = Date.now(), key = secret()): string {
   const body = b64(JSON.stringify({ ...user, exp: Math.floor(now / 1000) + MAX_AGE_S }));
   return `${body}.${sign(body, key)}`;
 }

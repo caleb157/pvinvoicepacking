@@ -5,7 +5,10 @@
 //   FOB IGST INR   = FOB value INR × IGST rate
 //   Invoice value  = FOB value (IGST is paid and refunded, not added to the invoice)
 //   Packages       = qty ÷ units per package; weights and CBM are per package × packages.
-// Everything here is pure so the page, the Excel and the PDF can never disagree.
+// The invoice currency is whatever the Odoo document uses (fields keep the "Usd" name).
+// Invoice lines and packing rows are separate: the packing list can split a line over
+// several carton sizes, and its case numbers always run 1..N across the rows.
+// Everything here is pure so the page, the Excel, the PDFs and the labels can never disagree.
 
 export const ICEGATE_RATES_URL = 'https://foservices.icegate.gov.in/#/services/notifyPublishScreen';
 export const CUBIC_INCH_TO_M3 = 0.0000163871;
@@ -23,19 +26,34 @@ export interface ExportShipper extends ExportParty {
 }
 
 export interface ExportLine {
-  sku: string;
+  sku: string;            // product code shown: the customer SKU (Odoo variant tag), else ours
+  internalSku: string;    // our Odoo internal reference
   description: string;
   hsnCode: string;
   quantity: number;
   uom: string;
   fobPriceUsd: number;
-  igstRatePct: number;    // 18 = 18%
-  unitsPerPackage: number;
-  packageDims: string;    // "20 x 20 x 20" inches
-  packageKind: string;    // "Carton"
-  netWeightKg: number;    // per package
-  grossWeightKg: number;  // per package
+  igstRatePct: number;    // 18 = 18%; 0 on an LUT invoice
 }
+
+/** One packing list row. A line can be split over several rows (e.g. 100 in boxes of 20 + 10 in one box). */
+export interface PackRow {
+  sku: string;              // product code shown (same rule as the invoice)
+  internalSku: string;
+  customerSku: string;      // for the carton label; blank when the product has no variant tag
+  description: string;
+  labelDescription: string; // short name for labels and the Non-DG letter
+  quantity: number;
+  unitsPerPackage: number;
+  packageDims: string;      // "20 x 20 x 20" inches
+  packageKind: string;
+  netWeightKg: number;      // per package
+  grossWeightKg: number;    // per package
+  unitGrossKg: number;      // Odoo product weight (average gross per piece); 0 when Odoo has none
+  grossManual: boolean;     // gross typed by hand, so it no longer follows units × Odoo weight
+}
+
+export type TaxMode = 'igst' | 'lut';
 
 export interface ExportDocData {
   invoiceNo: string;
@@ -58,13 +76,18 @@ export interface ExportDocData {
   finalDestination: string;
   termsOfDelivery: string;       // "FOB Jodhpur, 50% Advance and 50% on BOL"
   handlingInformation: string;
-  exchangeRate: number;          // INR per USD
+  currency: string;              // invoice currency from Odoo, e.g. USD
+  taxMode: TaxMode;              // IGST paid, or export under LUT without IGST
+  lutArn: string;
+  isDraft: boolean;              // built from a sales order (no invoice yet)
+  exchangeRate: number;          // INR per unit of currency (customs rate)
   notificationNo: string;
   shippingInr: number;
   shippingIgstInr: number;
   signatoryCompany: string;
   signatoryName: string;
   lines: ExportLine[];
+  packing: PackRow[];
 }
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -77,10 +100,13 @@ export interface InvoiceLineCalc {
   invoiceValueUsd: number;
 }
 
-export function invoiceLine(line: ExportLine, rate: number): InvoiceLineCalc {
+/** IGST rate used on the documents: the line's rate, or 0 on an LUT invoice. */
+export const igstPct = (line: ExportLine, taxMode: TaxMode = 'igst') => (taxMode === 'lut' ? 0 : line.igstRatePct || 0);
+
+export function invoiceLine(line: ExportLine, rate: number, taxMode: TaxMode = 'igst'): InvoiceLineCalc {
   const fobValueUsd = line.quantity * line.fobPriceUsd;
   const fobValueInr = fobValueUsd * rate;
-  const fobIgstInr = fobValueInr * (line.igstRatePct / 100);
+  const fobIgstInr = fobValueInr * (igstPct(line, taxMode) / 100);
   return { fobValueUsd, fobValueInr, fobIgstInr, invoiceValueInr: fobValueInr, invoiceValueUsd: fobValueUsd };
 }
 
@@ -96,10 +122,10 @@ export interface InvoiceTotals {
   totalIgstInr: number;
 }
 
-export function invoiceTotals(doc: Pick<ExportDocData, 'lines' | 'exchangeRate' | 'shippingInr' | 'shippingIgstInr'>): InvoiceTotals {
+export function invoiceTotals(doc: Pick<ExportDocData, 'lines' | 'exchangeRate' | 'shippingInr' | 'shippingIgstInr'> & { taxMode?: TaxMode }): InvoiceTotals {
   const t = { quantity: 0, fobValueUsd: 0, fobValueInr: 0, fobIgstInr: 0, invoiceValueInr: 0, invoiceValueUsd: 0 };
   for (const l of doc.lines) {
-    const c = invoiceLine(l, doc.exchangeRate);
+    const c = invoiceLine(l, doc.exchangeRate, doc.taxMode);
     t.quantity += l.quantity;
     t.fobValueUsd += c.fobValueUsd;
     t.fobValueInr += c.fobValueInr;
@@ -110,8 +136,8 @@ export function invoiceTotals(doc: Pick<ExportDocData, 'lines' | 'exchangeRate' 
   return {
     ...t,
     shippingInr: doc.shippingInr || 0,
-    shippingIgstInr: doc.shippingIgstInr || 0,
-    totalIgstInr: t.fobIgstInr + (doc.shippingIgstInr || 0),
+    shippingIgstInr: doc.taxMode === 'lut' ? 0 : doc.shippingIgstInr || 0,
+    totalIgstInr: t.fobIgstInr + (doc.taxMode === 'lut' ? 0 : doc.shippingIgstInr || 0),
   };
 }
 
@@ -131,8 +157,10 @@ export interface PackingLineCalc {
   cbmPerPackage: number | null;
 }
 
-/** Package count per line (whole packages) and the running case & carton numbers. */
-export function packingLines(lines: ExportLine[]): PackingLineCalc[] {
+type Packable = Pick<PackRow, 'quantity' | 'unitsPerPackage' | 'packageDims' | 'netWeightKg' | 'grossWeightKg'>;
+
+/** Package count per row (whole packages) and the running case & carton numbers. */
+export function packingLines(lines: Packable[]): PackingLineCalc[] {
   let next = 1;
   return lines.map(l => {
     const per = l.unitsPerPackage > 0 ? l.unitsPerPackage : 0;
@@ -153,7 +181,7 @@ export interface PackingTotals {
   cbm: number;
 }
 
-export function packingTotals(lines: ExportLine[]): PackingTotals {
+export function packingTotals(lines: Packable[]): PackingTotals {
   const calc = packingLines(lines);
   const t = { quantity: 0, packages: 0, netWeightKg: 0, grossWeightKg: 0, cbm: 0 };
   lines.forEach((l, i) => {
@@ -198,14 +226,22 @@ export function numberToWords(n: number): string {
   return parts.join(' ');
 }
 
-/** "Three Thousand Eight Hundred Ninety Nine Dollars and Ninety One Cents" */
-export function usdInWords(amount: number): string {
+const CURRENCY_WORDS: Record<string, [string, string, string, string]> = {
+  USD: ['Dollar', 'Dollars', 'Cent', 'Cents'], CAD: ['Canadian Dollar', 'Canadian Dollars', 'Cent', 'Cents'],
+  AUD: ['Australian Dollar', 'Australian Dollars', 'Cent', 'Cents'], EUR: ['Euro', 'Euros', 'Cent', 'Cents'],
+  GBP: ['Pound', 'Pounds', 'Penny', 'Pence'], INR: ['Rupee', 'Rupees', 'Paisa', 'Paise'],
+};
+
+/** "Three Thousand Eight Hundred Ninety Nine Dollars and Ninety One Cents" (or Euros, Pounds, ...) */
+export function amountInWords(amount: number, currency = 'USD'): string {
+  const [one, many, subOne, subMany] = CURRENCY_WORDS[currency.toUpperCase()] ?? [currency, currency, 'Cent', 'Cents'];
   const cents = Math.round(Math.abs(amount) * 100);
-  const dollars = Math.floor(cents / 100);
+  const whole = Math.floor(cents / 100);
   const c = cents % 100;
-  const d = `${numberToWords(dollars)} ${dollars === 1 ? 'Dollar' : 'Dollars'}`;
-  return c ? `${d} and ${numberToWords(c)} ${c === 1 ? 'Cent' : 'Cents'}` : d;
+  const d = `${numberToWords(whole)} ${whole === 1 ? one : many}`;
+  return c ? `${d} and ${numberToWords(c)} ${c === 1 ? subOne : subMany}` : d;
 }
+export const usdInWords = (amount: number) => amountInWords(amount, 'USD');
 
 // ---------- helpers for pre-filling ----------
 
@@ -230,23 +266,76 @@ export interface PackingDefaults {
   grossWeightKg: number;
 }
 
-/** Packing pre-fill from the Odoo product's packaging (the one with the most units):
- *  its package type's size in inches, net = Odoo product weight × units, gross adds
- *  the package type's empty weight. Null when the product has no packaging in Odoo. */
-export function packingFromOdoo(
-  productWeightKg: number | null | undefined,
-  packaging: { units: number; dims_in: number[] | null; empty_kg: number } | null | undefined,
-): PackingDefaults | null {
-  if (!packaging || !(packaging.units > 0)) return null;
-  const net = round2(Number(productWeightKg || 0) * packaging.units);
-  const d = packaging.dims_in;
+/** Short item name for carton labels and the Non-DG letter: the part before the first "/",
+ *  plus anything in brackets elsewhere ("Ashtray with Cork / 5 x 5 x 5 inch / with cork (Mango)"
+ *  → "Ashtray with Cork (Mango)"). "(Box of 20)" style notes are left out. */
+export function labelDescription(description: string): string {
+  const text = String(description || '').replace(/^\[[^\]]*\]\s*/, '').trim();
+  const first = text.split('/')[0].trim();
+  const extras = [...text.matchAll(/\(([^()]*)\)/g)]
+    .map(m => m[0].trim())
+    .filter(p => !/^\(\s*box of/i.test(p) && !first.includes(p));
+  return [first, ...new Set(extras)].filter(Boolean).join(' ');
+}
+
+/** Gross weight of one package from the Odoo per-piece gross weight. */
+export const grossFromUnits = (unitGrossKg: number, units: number) => round2((unitGrossKg || 0) * (units || 0));
+
+/** A packing row for an invoice line, pre-filled from what was used last time for that SKU. */
+export function packRowFromLine(
+  line: ExportLine, opts: { customerSku: string; unitGrossKg: number; remembered?: PackingDefaults | null },
+): PackRow {
+  const r = opts.remembered;
+  const units = r?.unitsPerPackage || 0;
+  const gross = opts.unitGrossKg > 0 && units > 0 ? grossFromUnits(opts.unitGrossKg, units) : (r?.grossWeightKg || 0);
   return {
-    unitsPerPackage: packaging.units,
-    packageDims: d && d.length === 3 ? formatDims(d[0], d[1], d[2]) : '',
-    packageKind: 'Carton',
-    netWeightKg: net,
-    grossWeightKg: net ? round2(net + Number(packaging.empty_kg || 0)) : 0,
+    sku: line.sku, internalSku: line.internalSku, customerSku: opts.customerSku,
+    description: line.description, labelDescription: labelDescription(line.description),
+    quantity: line.quantity, unitsPerPackage: units, packageDims: r?.packageDims || '', packageKind: r?.packageKind || 'Carton',
+    netWeightKg: r?.netWeightKg || 0, grossWeightKg: gross, unitGrossKg: opts.unitGrossKg || 0,
+    grossManual: !(opts.unitGrossKg > 0) && gross > 0,
   };
+}
+
+/** Packing quantities that don't add up to the invoice, per product. */
+export function packingMismatches(lines: ExportLine[], packing: PackRow[]): { key: string; invoice: number; packed: number }[] {
+  const key = (x: { internalSku: string; sku: string; description: string }) => x.internalSku || x.sku || x.description;
+  const inv = new Map<string, number>();
+  const packed = new Map<string, number>();
+  for (const l of lines) inv.set(key(l), (inv.get(key(l)) ?? 0) + (l.quantity || 0));
+  for (const p of packing) packed.set(key(p), (packed.get(key(p)) ?? 0) + (p.quantity || 0));
+  const keys = new Set([...inv.keys(), ...packed.keys()]);
+  return [...keys].map(k => ({ key: k, invoice: inv.get(k) ?? 0, packed: packed.get(k) ?? 0 }))
+    .filter(m => Math.abs(m.invoice - m.packed) > 1e-9);
+}
+
+/** Rows where the quantity isn't a whole number of packages (the last carton is part-full). */
+export const unevenRows = (packing: PackRow[]) =>
+  packing.map((p, i) => ({ p, i })).filter(({ p }) => p.unitsPerPackage > 0 && p.quantity > 0 && Math.abs(p.quantity / p.unitsPerPackage - Math.round(p.quantity / p.unitsPerPackage)) > 1e-9);
+
+/** One entry per carton, numbered across the whole shipment ("3 of 12"), for the A5 labels. */
+export function cartonLabels(packing: PackRow[]) {
+  const calc = packingLines(packing);
+  const total = calc.reduce((t, c) => t + c.packages, 0);
+  const out: { carton: number; total: number; row: PackRow; unitsInCarton: number }[] = [];
+  let n = 0;
+  packing.forEach((row, i) => {
+    let left = row.quantity;
+    for (let k = 0; k < calc[i].packages; k++) {
+      const units = Math.min(row.unitsPerPackage, left);
+      left -= units;
+      out.push({ carton: ++n, total, row, unitsInCarton: units });
+    }
+  });
+  return out;
+}
+
+/** Line under the INVOICE title: IGST paid, or export under LUT (with its ARN). */
+export function invoiceBanner(doc: Pick<ExportDocData, 'taxMode' | 'lutArn'>): string {
+  if (doc.taxMode === 'lut') {
+    return `** SUPPLY MEANT FOR EXPORT UNDER LETTER OF UNDERTAKING WITHOUT PAYMENT OF INTEGRATED TAX${doc.lutArn ? ` (LUT ARN ${doc.lutArn})` : ''} **`;
+  }
+  return '** SUPPLY MEANT FOR EXPORT UPON PAYMENT OF INTEGRATED TAX **';
 }
 
 export const safeFileName = (s: string) => s.replace(/[\\/:*?"<>|]+/g, '-').trim();

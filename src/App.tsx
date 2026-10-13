@@ -1,23 +1,27 @@
-// Sign-in gate and the app frame. People sign in with their own Odoo login.
+// Sign-in gate and the app frame: Documents, Shipping bills, Remittances, Settings.
+// People sign in with an app password (added in Settings by an admin); nobody needs Odoo.
 import { useEffect, useState } from 'react';
-import { FileText, Loader2, LogOut } from 'lucide-react';
+import { FileText, Landmark, Loader2, LogOut, Settings as SettingsIcon, Ship } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Toaster } from '@/components/ui/sonner';
-import { AppUser, login, logout, whoAmI } from '@/lib/export-docs-data';
+import { AppSettings, AppUser, loadInit, login, logout, whoAmI } from '@/lib/export-docs-data';
 import Editor from '@/pages/Editor';
+import Remittances from '@/pages/Remittances';
+import Settings from '@/pages/Settings';
+import ShippingBills from '@/pages/ShippingBills';
 
 function SignIn({ onSignedIn }: { onSignedIn: (u: AppUser) => void }) {
-  const [form, setForm] = useState({ login: '', password: '' });
+  const [form, setForm] = useState({ email: '', password: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true); setError('');
-    try { onSignedIn(await login(form.login.trim(), form.password)); }
+    try { onSignedIn(await login(form.email.trim(), form.password)); }
     catch (err: any) { setError(err?.message || 'Could not sign in'); }
     finally { setBusy(false); }
   };
@@ -25,24 +29,23 @@ function SignIn({ onSignedIn }: { onSignedIn: (u: AppUser) => void }) {
     <div className="min-h-screen flex items-center justify-center p-4 bg-background">
       <Card className="w-full max-w-sm">
         <CardHeader className="pb-2">
-          <CardTitle className="text-base flex items-center gap-2"><FileText className="h-5 w-5 text-primary" /> Invoice &amp; Packing List</CardTitle>
-          <p className="text-sm text-muted-foreground">Sign in with your Odoo login.</p>
+          <CardTitle className="text-base flex items-center gap-2"><Ship className="h-5 w-5 text-primary" /> Shipping Documents</CardTitle>
+          <p className="text-sm text-muted-foreground">Parable Ventures. Sign in with the email and password you were given.</p>
         </CardHeader>
         <CardContent>
           <form className="space-y-3" onSubmit={submit}>
             <div>
-              <Label htmlFor="login" className="text-xs">Odoo email</Label>
-              <Input id="login" autoComplete="username" value={form.login} onChange={e => setForm(f => ({ ...f, login: e.target.value }))} />
+              <Label htmlFor="email" className="text-xs">Email</Label>
+              <Input id="email" type="email" autoComplete="username" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
             </div>
             <div>
-              <Label htmlFor="password" className="text-xs">Password or API key</Label>
+              <Label htmlFor="password" className="text-xs">Password</Label>
               <Input id="password" type="password" autoComplete="current-password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} />
             </div>
             {error && <p className="text-xs text-destructive">{error}</p>}
-            <Button type="submit" className="w-full" disabled={busy || !form.login || !form.password}>
+            <Button type="submit" className="w-full" disabled={busy || !form.email || !form.password}>
               {busy && <Loader2 className="h-4 w-4 animate-spin" />} Sign in
             </Button>
-            <p className="text-[11px] text-muted-foreground">If your Odoo account uses two-step sign-in, use an API key from Odoo → My Profile → Account Security.</p>
           </form>
         </CardContent>
       </Card>
@@ -50,15 +53,36 @@ function SignIn({ onSignedIn }: { onSignedIn: (u: AppUser) => void }) {
   );
 }
 
+const TABS = [
+  { key: 'docs', label: 'Documents', icon: FileText },
+  { key: 'bills', label: 'Shipping bills', icon: Ship },
+  { key: 'remit', label: 'Remittances', icon: Landmark },
+  { key: 'settings', label: 'Settings', icon: SettingsIcon },
+] as const;
+type Tab = typeof TABS[number]['key'];
+
+const tabFromHash = (): Tab => {
+  const h = window.location.hash.replace('#', '');
+  return (TABS.find(t => t.key === h)?.key ?? 'docs') as Tab;
+};
+
 export default function App() {
   const [user, setUser] = useState<AppUser | null | undefined>(undefined);
+  const [tab, setTab] = useState<Tab>(tabFromHash);
+  const [settings, setSettings] = useState<AppSettings | null>(null);
 
   useEffect(() => {
     whoAmI().then(setUser).catch(e => { setUser(null); toast.error(e?.message || 'Could not reach the app server'); });
     const out = () => setUser(null);
+    const hash = () => setTab(tabFromHash());
     window.addEventListener('ip:signed-out', out);
-    return () => window.removeEventListener('ip:signed-out', out);
+    window.addEventListener('hashchange', hash);
+    return () => { window.removeEventListener('ip:signed-out', out); window.removeEventListener('hashchange', hash); };
   }, []);
+
+  useEffect(() => {
+    if (user) loadInit().then(r => setSettings(r.settings)).catch(() => { /* Documents shows the setup message */ });
+  }, [user]);
 
   const signOut = async () => {
     try { await logout(); } finally { setUser(null); }
@@ -74,15 +98,24 @@ export default function App() {
       {user && (
         <div className="min-h-screen bg-background">
           <header className="border-b">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center gap-3">
-              <h1 className="page-title flex items-center gap-2 flex-1 min-w-0 truncate">
-                <FileText className="h-5 w-5 text-primary shrink-0" /> Commercial Invoice &amp; Packing List
-              </h1>
-              <span className="text-xs text-muted-foreground hidden sm:inline">{user.name}</span>
-              <Button variant="ghost" size="sm" className="h-8 gap-1.5" onClick={signOut}><LogOut className="h-3.5 w-3.5" /> Sign out</Button>
+            <div className="px-4 sm:px-6 h-14 flex items-center gap-3">
+              <h1 className="page-title flex items-center gap-2 shrink-0"><Ship className="h-5 w-5 text-primary" /> <span className="hidden md:inline">Shipping Documents</span></h1>
+              <nav className="flex gap-1 overflow-x-auto flex-1 min-w-0">
+                {TABS.map(t => (
+                  <a key={t.key} href={`#${t.key}`}
+                    className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm whitespace-nowrap ${tab === t.key ? 'bg-secondary font-medium' : 'text-muted-foreground hover:text-foreground'}`}>
+                    <t.icon className="h-4 w-4" /> <span className="hidden sm:inline">{t.label}</span>
+                  </a>
+                ))}
+              </nav>
+              <span className="text-xs text-muted-foreground hidden lg:inline">{user.name || user.email}</span>
+              <Button variant="ghost" size="sm" className="h-8 gap-1.5" onClick={signOut}><LogOut className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Sign out</span></Button>
             </div>
           </header>
-          <Editor />
+          {tab === 'docs' && <Editor settings={settings} />}
+          {tab === 'bills' && <ShippingBills />}
+          {tab === 'remit' && <Remittances />}
+          {tab === 'settings' && <Settings user={user} settings={settings} onSaved={setSettings} />}
         </div>
       )}
     </>

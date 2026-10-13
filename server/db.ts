@@ -1,23 +1,46 @@
-// The app's own small database (Neon Postgres, added from Vercel → Storage):
-// customs exchange rates, packing details remembered per SKU, and a copy of every
-// generated document set. Tables come from sql/setup.sql, run once by hand.
+// The app's own database (Neon Postgres, added from Vercel → Storage): users, settings,
+// customs rates, packing details per SKU, saved shipments, the shipping bill tracker and
+// inward remittances. Tables come from sql/setup.sql, run by hand.
 import { neon } from '@neondatabase/serverless';
 
-export const MISSING_TABLES_MSG =
-  'The app database is not set up yet. Run sql/setup.sql in the Neon SQL editor, then reload.';
-
-function sql() {
+let client: ReturnType<typeof neon> | null = null;
+export function sql() {
   const url = process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
   if (!url) throw new Error('No database connected. In Vercel, open Storage and connect a Neon Postgres database to this project.');
-  return neon(url);
+  return (client ??= neon(url));
+}
+const rowsOf = (r: unknown) => r as any[];
+
+// ---------- settings ----------
+
+export interface AppSettings {
+  lutArn: string; lutFrom: string; lutTo: string; adCode: string; signatoryName: string; signatoryTitle: string;
+}
+export const DEFAULT_SETTINGS: AppSettings = {
+  lutArn: '', lutFrom: '', lutTo: '', adCode: '', signatoryName: 'Parker Hoye', signatoryTitle: 'Director',
+};
+
+export async function getSettings(): Promise<AppSettings> {
+  const rows = rowsOf(await sql()`select key, value from app_settings`);
+  const out: any = { ...DEFAULT_SETTINGS };
+  for (const r of rows) if (r.key in out) out[r.key] = r.value;
+  return out;
 }
 
-export const isMissingTable = (e: any) => e?.code === '42P01' || /relation .* does not exist/i.test(String(e?.message));
+export async function saveSettings(s: Partial<AppSettings>, by: string) {
+  for (const [k, v] of Object.entries(s)) {
+    if (!(k in DEFAULT_SETTINGS)) continue;
+    await sql()`insert into app_settings (key, value, updated_by, updated_at) values (${k}, ${JSON.stringify(v)}::jsonb, ${by}, now())
+      on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`;
+  }
+}
+
+// ---------- customs rate ----------
 
 export async function latestRate(currency = 'USD') {
-  const rows = await sql()`select id, currency, rate::float8 as rate, notification_no, effective_from::text as effective_from, created_at
+  const rows = rowsOf(await sql()`select id, currency, rate::float8 as rate, notification_no, effective_from::text as effective_from, created_at
     from customs_exchange_rates where currency = ${currency}
-    order by effective_from desc, created_at desc limit 1`;
+    order by effective_from desc, created_at desc limit 1`);
   return rows[0] ?? null;
 }
 
@@ -26,22 +49,23 @@ export async function saveRate(r: { currency: string; rate: number; notification
     values (${r.currency}, ${r.rate}, ${r.notification_no || null}, ${r.effective_from}, ${r.source_url}, ${by})`;
 }
 
-export async function packingProfiles(skus: string[]) {
-  if (!skus.length) return [];
-  return sql()`select sku, units_per_package::float8 as units_per_package, package_dims_in, package_kind,
-      net_weight_kg::float8 as net_weight_kg, gross_weight_kg::float8 as gross_weight_kg
-    from export_packing_profiles where sku = any(${skus})`;
-}
+// ---------- packing details per SKU ----------
 
 export interface PackingRow {
   sku: string; units_per_package: number | null; package_dims_in: string | null; package_kind: string | null;
   net_weight_kg: number | null; gross_weight_kg: number | null;
 }
 
+export async function packingProfiles(skus: string[]) {
+  if (!skus.length) return [];
+  return rowsOf(await sql()`select sku, units_per_package::float8 as units_per_package, package_dims_in, package_kind,
+      net_weight_kg::float8 as net_weight_kg, gross_weight_kg::float8 as gross_weight_kg
+    from export_packing_profiles where sku = any(${skus})`);
+}
+
 export async function savePackingProfiles(rows: PackingRow[], by: string) {
-  const q = sql();
   for (const r of rows) {
-    await q`insert into export_packing_profiles (sku, units_per_package, package_dims_in, package_kind, net_weight_kg, gross_weight_kg, updated_by, updated_at)
+    await sql()`insert into export_packing_profiles (sku, units_per_package, package_dims_in, package_kind, net_weight_kg, gross_weight_kg, updated_by, updated_at)
       values (${r.sku}, ${r.units_per_package}, ${r.package_dims_in}, ${r.package_kind}, ${r.net_weight_kg}, ${r.gross_weight_kg}, ${by}, now())
       on conflict (sku) do update set units_per_package = excluded.units_per_package, package_dims_in = excluded.package_dims_in,
         package_kind = excluded.package_kind, net_weight_kg = excluded.net_weight_kg, gross_weight_kg = excluded.gross_weight_kg,
@@ -49,17 +73,90 @@ export async function savePackingProfiles(rows: PackingRow[], by: string) {
   }
 }
 
-export async function listDocs(limit = 20) {
-  return sql()`select id, invoice_no, odoo_invoice_id, exchange_rate::float8 as exchange_rate, total_usd::float8 as total_usd, created_by, created_at
-    from export_documents order by created_at desc limit ${limit}`;
+// ---------- shipments (saved document sets) ----------
+
+export async function listShipments(limit = 30) {
+  return rowsOf(await sql()`select id, source_kind, source_name, odoo_id, invoice_no, updated_by, updated_at
+    from shipments order by updated_at desc limit ${limit}`);
 }
 
-export async function getDoc(id: string) {
-  const rows = await sql()`select payload, odoo_invoice_id from export_documents where id = ${id}`;
+export async function getShipment(kind: string, name: string) {
+  const rows = rowsOf(await sql()`select id, source_kind, source_name, odoo_id, payload, updated_by, updated_at
+    from shipments where source_kind = ${kind} and source_name = ${name}`);
   return rows[0] ?? null;
 }
 
-export async function saveDoc(d: { invoice_no: string; odoo_invoice_id: number | null; exchange_rate: number; notification_no: string | null; total_usd: number; payload: unknown }, by: string) {
-  await sql()`insert into export_documents (invoice_no, odoo_invoice_id, exchange_rate, notification_no, total_usd, payload, created_by)
-    values (${d.invoice_no}, ${d.odoo_invoice_id}, ${d.exchange_rate}, ${d.notification_no}, ${d.total_usd}, ${JSON.stringify(d.payload)}::jsonb, ${by})`;
+export async function saveShipment(s: { source_kind: string; source_name: string; odoo_id: number | null; invoice_no: string | null; payload: unknown }, by: string) {
+  await sql()`insert into shipments (source_kind, source_name, odoo_id, invoice_no, payload, updated_by, updated_at)
+    values (${s.source_kind}, ${s.source_name}, ${s.odoo_id}, ${s.invoice_no}, ${JSON.stringify(s.payload)}::jsonb, ${by}, now())
+    on conflict (source_kind, source_name) do update set odoo_id = excluded.odoo_id, invoice_no = excluded.invoice_no,
+      payload = excluded.payload, updated_by = excluded.updated_by, updated_at = now()`;
+}
+
+// ---------- tracker tables (shipping bills, inward remittances) ----------
+
+type ColKind = 'text' | 'date' | 'num' | 'int';
+export const TABLES: Record<'shipping_bills' | 'inward_remittances', Record<string, ColKind>> = {
+  shipping_bills: {
+    sb_number: 'text', sb_date: 'date', port_code: 'text', invoice_no: 'text', invoice_date: 'date', odoo_invoice_id: 'int',
+    taxable_value_inr: 'num', currency: 'text', consignee: 'text', buyer: 'text', fob_value: 'num', freight_value: 'num',
+    insurance_value: 'num', transport_doc_no: 'text', transport_doc_date: 'date', ebrc_date: 'date', bank_submitted_date: 'date',
+    bank_status: 'text', status: 'text', comments: 'text',
+  },
+  inward_remittances: {
+    remittance_no: 'text', value_date: 'date', currency: 'text', fcy_amount: 'num', exchange_rate: 'num', inr_amount: 'num',
+    remitter: 'text', remitting_bank: 'text', purpose_code: 'text', comments: 'text',
+  },
+};
+export type TrackerTable = keyof typeof TABLES;
+
+/** Keeps only known columns and turns each into the right type ('' → null). */
+export function cleanRow(table: TrackerTable, row: Record<string, unknown>) {
+  const out: Record<string, string | number | null> = {};
+  for (const [col, kind] of Object.entries(TABLES[table])) {
+    if (!(col in row)) continue;
+    const v = row[col];
+    if (v == null || v === '') { out[col] = null; continue; }
+    if (kind === 'num' || kind === 'int') {
+      const n = Number(String(v).replace(/[$,\s]/g, ''));
+      out[col] = Number.isFinite(n) ? (kind === 'int' ? Math.round(n) : n) : null;
+    } else if (kind === 'date') {
+      out[col] = /^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? String(v) : null;
+    } else out[col] = String(v).slice(0, 2000);
+  }
+  return out;
+}
+
+function selectCols(table: TrackerTable) {
+  return Object.entries(TABLES[table]).map(([c, k]) =>
+    k === 'date' ? `${c}::text as ${c}` : k === 'num' ? `${c}::float8 as ${c}` : c).join(', ');
+}
+
+export async function listRows(table: TrackerTable) {
+  const order = table === 'shipping_bills' ? 'sb_date desc nulls first, created_at desc' : 'value_date desc nulls first, created_at desc';
+  return rowsOf(await sql().query(`select id, ${selectCols(table)}, updated_by, updated_at from ${table} order by ${order}`));
+}
+
+export async function insertRow(table: TrackerTable, row: Record<string, unknown>, by: string) {
+  const r = cleanRow(table, row);
+  const cols = Object.keys(r);
+  const names = [...cols, 'created_by', 'updated_by'];
+  const rows = rowsOf(await sql().query(
+    `insert into ${table} (${names.join(', ')}) values (${names.map((_, i) => `$${i + 1}`).join(', ')})
+     returning id, ${selectCols(table)}, updated_by, updated_at`, [...cols.map(c => r[c]), by, by]));
+  return rows[0];
+}
+
+export async function updateRow(table: TrackerTable, id: string, row: Record<string, unknown>, by: string) {
+  const r = cleanRow(table, row);
+  const cols = Object.keys(r);
+  const sets = [...cols.map((c, i) => `${c} = $${i + 1}`), `updated_by = $${cols.length + 1}`, 'updated_at = now()'];
+  const rows = rowsOf(await sql().query(
+    `update ${table} set ${sets.join(', ')} where id = $${cols.length + 2}
+     returning id, ${selectCols(table)}, updated_by, updated_at`, [...cols.map(c => r[c]), by, id]));
+  return rows[0] ?? null;
+}
+
+export async function deleteRow(table: TrackerTable, id: string) {
+  await sql().query(`delete from ${table} where id = $1`, [id]);
 }

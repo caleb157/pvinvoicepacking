@@ -2,7 +2,7 @@
 // layout of the INV262700015 spreadsheets (same addresses, labels and formulas),
 // so the files can still be edited in Excel with live totals.
 import {
-  ExportDocData, ExportParty, invoiceLine, invoiceTotals, packingLines, packingTotals, usdInWords,
+  ExportDocData, ExportParty, amountInWords, igstPct, invoiceBanner, invoiceLine, invoiceTotals, packingLines, packingTotals,
 } from './export-docs';
 import { Cell, Sheet, buildXlsx, excelDate } from './xlsx-writer';
 
@@ -78,15 +78,16 @@ function header(cells: Cells, doc: ExportDocData, o: number, kind: 'invoice' | '
 export function invoiceSheet(doc: ExportDocData): Sheet {
   const cells: Cells = {};
   const merges: string[] = ['B1:O1', 'B2:O2'];
-  put(cells, 'B1', 'INVOICE', 'title');
-  put(cells, 'B2', '** SUPPLY MEANT FOR EXPORT UPON PAYMENT OF INTEGRATED TAX **', 'banner');
+  const cur = doc.currency || 'USD';
+  put(cells, 'B1', doc.isDraft ? 'DRAFT INVOICE' : 'INVOICE', 'title');
+  put(cells, 'B2', invoiceBanner(doc), 'banner');
   header(cells, doc, 0, 'invoice');
 
   const H = 19;
   const heads: [string, string][] = [
     ['B', 'Product Code'], ['C', 'Description of Goods'], ['F', 'HSN CODE'], ['G', 'Unit Quantity'], ['H', 'UOM'],
-    ['I', 'FOB Price USD'], ['J', 'FOB Value USD'], ['K', 'IGST Rate %'], ['L', 'FOB Value INR'], ['M', 'FOB IGST INR'],
-    ['N', 'Invoice Value INR'], ['O', 'Invoice Value USD'],
+    ['I', `FOB Price ${cur}`], ['J', `FOB Value ${cur}`], ['K', 'IGST Rate %'], ['L', 'FOB Value INR'], ['M', 'FOB IGST INR'],
+    ['N', 'Invoice Value INR'], ['O', `Invoice Value ${cur}`],
   ];
   heads.forEach(([c, t]) => put(cells, `${c}${H}`, t, 'head'));
   put(cells, `D${H}`, '', 'head'); put(cells, `E${H}`, '', 'head');
@@ -106,7 +107,7 @@ export function invoiceSheet(doc: ExportDocData): Sheet {
       ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O'].forEach(c => put(cells, `${c}${row}`, null, 'box'));
       continue;
     }
-    const c = invoiceLine(l, doc.exchangeRate);
+    const c = invoiceLine(l, doc.exchangeRate, doc.taxMode);
     put(cells, `B${row}`, l.sku, 'boxWrap');
     put(cells, `C${row}`, l.description, 'boxWrap'); put(cells, `D${row}`, null, 'boxWrap'); put(cells, `E${row}`, null, 'boxWrap');
     put(cells, `F${row}`, /^\d+$/.test(l.hsnCode) ? Number(l.hsnCode) : l.hsnCode, 'boxInt');
@@ -114,7 +115,7 @@ export function invoiceSheet(doc: ExportDocData): Sheet {
     put(cells, `H${row}`, l.uom, 'box');
     put(cells, `I${row}`, l.fobPriceUsd, 'boxNum');
     put(cells, `J${row}`, c.fobValueUsd, 'boxNum', `IF(G${row}<>"",I${row}*G${row},"")`);
-    put(cells, `K${row}`, l.igstRatePct / 100, 'boxPct');
+    put(cells, `K${row}`, igstPct(l, doc.taxMode) / 100, 'boxPct');
     put(cells, `L${row}`, c.fobValueInr, 'boxNum', `IF(J${row}<>"",J${row}*${rate},"")`);
     put(cells, `M${row}`, c.fobIgstInr, 'boxNum', `IF(L${row}<>"",L${row}*K${row},"")`);
     put(cells, `N${row}`, c.invoiceValueInr, 'boxNum', `IF(G${row}<>"",L${row},"")`);
@@ -134,10 +135,10 @@ export function invoiceSheet(doc: ExportDocData): Sheet {
   put(cells, `O${T}`, t.invoiceValueUsd, 'totNum', sum('O'));
 
   // Footer, left
-  put(cells, `B${T + 2}`, 'Total Invoice Amount in Words (USD)', 'bold');
-  put(cells, `B${T + 3}`, usdInWords(t.invoiceValueUsd), 'italic');
+  put(cells, `B${T + 2}`, `Total Invoice Amount in Words (${cur})`, 'bold');
+  put(cells, `B${T + 3}`, amountInWords(t.invoiceValueUsd, cur), 'italic');
   merges.push(`B${T + 3}:G${T + 3}`);
-  put(cells, `B${T + 4}`, 'Exchange Rate (INR/USD)', 'label'); put(cells, `D${rateRow}`, doc.exchangeRate, 'num');
+  put(cells, `B${T + 4}`, `Exchange Rate (INR/${cur})`, 'label'); put(cells, `D${rateRow}`, doc.exchangeRate, 'num');
   put(cells, `B${T + 5}`, 'As per Notification No.', 'label'); put(cells, `D${T + 5}`, doc.notificationNo);
   put(cells, `B${T + 6}`, 'Shippers Declaration', 'bold');
   put(cells, `B${T + 7}`, 'We declare that invoice shows the actual price of goods');
@@ -175,7 +176,7 @@ export function invoiceSheet(doc: ExportDocData): Sheet {
 export function packingSheet(doc: ExportDocData): Sheet {
   const cells: Cells = {};
   const merges: string[] = ['B1:O1'];
-  put(cells, 'B1', 'Packing List', 'title');
+  put(cells, 'B1', doc.isDraft ? 'DRAFT Packing List' : 'Packing List', 'title');
   header(cells, doc, -1, 'packing');
 
   const H = 18;
@@ -189,13 +190,13 @@ export function packingSheet(doc: ExportDocData): Sheet {
   merges.push(`D${H}:F${H}`, `J${H}:L${H}`);
 
   const first = H + 1;
-  const n = doc.lines.length;
+  const n = doc.packing.length;
   const T = first + n + 2;
   const last = T - 1;
-  const calc = packingLines(doc.lines);
+  const calc = packingLines(doc.packing);
   for (let i = 0; i < n + 2; i++) {
     const row = first + i;
-    const l = doc.lines[i];
+    const l = doc.packing[i];
     merges.push(`D${row}:F${row}`);
     if (!l) {
       ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O'].forEach(c => put(cells, `${c}${row}`, null, 'box'));
@@ -216,7 +217,7 @@ export function packingSheet(doc: ExportDocData): Sheet {
     put(cells, `O${row}`, c.cbmPerPackage, 'boxCbm');
   }
 
-  const t = packingTotals(doc.lines);
+  const t = packingTotals(doc.packing);
   ['C', 'D', 'E', 'F', 'H', 'I', 'J', 'K'].forEach(c => put(cells, `${c}${T}`, null, 'totText'));
   put(cells, `B${T}`, 'Consignment Total', 'totText');
   merges.push(`B${T}:F${T}`);

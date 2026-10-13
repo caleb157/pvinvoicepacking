@@ -1,17 +1,29 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { igstOf, packagingOf } from './odoo';
+import { cleanRow } from './db';
+import { chargeKind, igstOf, trackerFields } from './odoo';
 import { makeToken, readToken } from './session';
+import { checkPassword, hashPassword } from './users';
 
 const KEY = 'test-secret-0123456789';
 
 describe('sign-in cookie', () => {
   it('round-trips and rejects tampering or expiry', () => {
-    const t = makeToken({ uid: 7, name: 'Caleb', login: 'c@x.com' }, 0, KEY);
-    expect(readToken(t, 1000, KEY)).toMatchObject({ uid: 7, name: 'Caleb' });
+    const t = makeToken({ uid: 'u1', name: 'Nadeem', email: 'n@x.com', admin: false }, 0, KEY);
+    expect(readToken(t, 1000, KEY)).toMatchObject({ uid: 'u1', name: 'Nadeem', admin: false });
     expect(readToken(t.replace(/.$/, c => (c === 'A' ? 'B' : 'A')), 1000, KEY)).toBeNull();
     expect(readToken(t, 1000, 'another-secret-0123456789')).toBeNull();
     expect(readToken(t, 31 * 24 * 3600 * 1000, KEY)).toBeNull();
     expect(readToken('junk', 0, KEY)).toBeNull();
+  });
+});
+
+describe('passwords', () => {
+  it('hashes with a salt and checks', () => {
+    const h = hashPassword('correct horse');
+    expect(h).not.toBe(hashPassword('correct horse'));
+    expect(checkPassword('correct horse', h)).toBe(true);
+    expect(checkPassword('wrong', h)).toBe(false);
+    expect(checkPassword('x', 'garbage')).toBe(false);
   });
 });
 
@@ -22,33 +34,45 @@ describe('odoo mapping', () => {
     expect(igstOf([])).toBeNull();
   });
 
-  it('reads the biggest packaging and converts its size to inches', () => {
-    const types = new Map([[3, { packaging_length: 508, width: 254, height: 254, base_weight: 1500, length_uom_name: 'mm', weight_uom_name: 'g' }]]);
-    const p = packagingOf([{ qty: 1, name: 'Unit' }, { qty: 4, name: 'Carton', package_type_id: [3, 'Big'] }], types);
-    expect(p?.units).toBe(4);
-    expect(p?.dims_in?.map(n => Math.round(n * 100) / 100)).toEqual([20, 10, 10]);
-    expect(p?.empty_kg).toBeCloseTo(1.5);
-    expect(packagingOf([], types)).toBeNull();
+  it('spots freight and insurance lines', () => {
+    expect(chargeKind('FREIGHT Ocean freight')).toBe('freight');
+    expect(chargeKind('Marine insurance')).toBe('insurance');
+    expect(chargeKind('Mango Ashtray')).toBeNull();
+  });
+
+  it('fills the tracker with FOB net of freight and insurance', () => {
+    const line = (subtotal: number, charge: any) => ({ subtotal, charge }) as any;
+    const f = trackerFields({
+      id: 9, name: 'INV/2026/0001', date: '2026-10-01', currency: 'USD', amount_untaxed: 1150,
+      consignee: { name: 'Ship Co' }, buyer: { name: 'Bill Co' }, lines: [line(1000, null), line(120, 'freight'), line(30, 'insurance')],
+    } as any);
+    expect(f).toMatchObject({ invoice_no: 'INV/2026/0001', odoo_invoice_id: 9, consignee: 'Ship Co', buyer: 'Bill Co', fob_value: 1000, freight_value: 120, insurance_value: 30 });
   });
 });
 
-describe('api with a fake Odoo', () => {
-  const calls: any[] = [];
+describe('tracker rows', () => {
+  it('keeps known columns and cleans values', () => {
+    expect(cleanRow('shipping_bills', { sb_number: '123', fob_value: '$1,234.50', sb_date: '2026-03-01', ebrc_date: '1/3/26', hacker: 'x', comments: '' }))
+      .toEqual({ sb_number: '123', fob_value: 1234.5, sb_date: '2026-03-01', ebrc_date: null, comments: null });
+  });
+});
+
+describe('api', () => {
   beforeEach(() => {
     process.env.SESSION_SECRET = KEY;
+    process.env.ADMIN_EMAIL = 'Boss@X.com';
+    process.env.ADMIN_PASSWORD = 'admin-password';
     process.env.ODOO_URL = 'https://odoo.test';
     process.env.ODOO_USERNAME = 'api@x.com';
     process.env.ODOO_API_KEY = 'k';
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: any) => {
       const { params } = JSON.parse(init.body);
-      calls.push(params);
       let result: any = null;
-      if (params.service === 'common') result = params.args[1] === 'bad@x.com' ? false : (params.args[1] === 'api@x.com' ? 1 : 42);
+      if (params.service === 'common') result = 1;
       else {
         const [, , , model, method] = params.args;
-        if (method === 'fields_get') result = Object.fromEntries(['name', 'login', 'share', 'invoice_date', 'partner_id', 'amount_total', 'currency_id', 'invoice_origin', 'ref'].map(f => [f, {}]));
-        else if (model === 'res.users') result = [{ id: 42, name: 'Caleb', login: 'caleb@x.com', share: false }];
-        else if (model === 'account.move') result = [{ id: 9, name: 'INV/1', invoice_date: '2026-10-01', partner_id: [5, 'Buyer'], amount_total: 100, currency_id: [1, 'USD'], invoice_origin: 'S001', ref: false }];
+        if (method === 'fields_get') result = Object.fromEntries(['name', 'invoice_date', 'partner_id', 'amount_total', 'currency_id', 'invoice_origin', 'ref', 'state'].map(f => [f, {}]));
+        else if (model === 'account.move') result = [{ id: 9, name: 'INV/1', invoice_date: '2026-10-01', partner_id: [5, 'Buyer'], amount_total: 100, currency_id: [1, 'USD'], invoice_origin: 'S001', ref: false, state: 'posted' }];
       }
       return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result }));
     }));
@@ -58,25 +82,24 @@ describe('api with a fake Odoo', () => {
   const post = (url: string, body: unknown, cookie?: string) =>
     new Request(`https://app.test${url}`, { method: 'POST', body: JSON.stringify(body), headers: cookie ? { cookie } : {} });
 
-  it('signs in with an Odoo login, then lists invoices; refuses without a cookie', async () => {
+  it('signs the Vercel admin in without a database, then reads Odoo with the app key', async () => {
     const auth = await import('../api/auth');
     const odoo = await import('../api/odoo');
+    const users = await import('../api/users');
 
-    expect((await odoo.POST(post('/api/odoo', { action: 'list' }))).status).toBe(401);
-    expect((await auth.POST(post('/api/auth', { action: 'login', login: 'bad@x.com', password: 'x' }))).status).toBe(401);
+    expect((await odoo.POST(post('/api/odoo', { action: 'list', kind: 'invoice' }))).status).toBe(401);
 
-    const res = await auth.POST(post('/api/auth', { action: 'login', login: 'caleb@x.com', password: 'pw' }));
+    const res = await auth.POST(post('/api/auth', { action: 'login', email: 'boss@x.com', password: 'admin-password' }));
     expect(res.status).toBe(200);
     const cookie = res.headers.get('set-cookie')!.split(';')[0];
     expect(cookie).toMatch(/^ip_session=/);
 
-    const list = await odoo.POST(post('/api/odoo', { action: 'list', search: 'INV' }, cookie));
+    const list = await odoo.POST(post('/api/odoo', { action: 'list', kind: 'invoice', search: 'INV' }, cookie));
     expect(list.status).toBe(200);
-    expect((await list.json()).invoices).toEqual([
-      { id: 9, name: 'INV/1', date: '2026-10-01', customer: 'Buyer', amount_total: 100, currency: 'USD', origin: 'S001', ref: '' },
-    ]);
-    // The person's own password is only used to check the login; Odoo reads use the app's API key.
-    const reads = calls.filter(c => c.service === 'object');
-    expect(reads.every(c => c.args[2] === 'k')).toBe(true);
+    expect((await list.json()).items[0]).toMatchObject({ id: 9, name: 'INV/1', customer: 'Buyer', currency: 'USD', ref: '' });
+
+    // A non-admin cookie can't manage people.
+    const plain = `ip_session=${makeToken({ uid: 'env-admin', name: 'x', email: 'x@x.com', admin: false })}`;
+    expect((await users.POST(post('/api/users', { action: 'list' }, plain))).status).toBe(403);
   });
 });

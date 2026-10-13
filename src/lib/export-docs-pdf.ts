@@ -3,7 +3,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import {
-  ExportDocData, ExportParty, invoiceLine, invoiceTotals, packingLines, packingTotals, usdInWords,
+  ExportDocData, ExportParty, amountInWords, igstPct, invoiceBanner, invoiceLine, invoiceTotals, packingLines, packingTotals,
 } from './export-docs';
 
 const money = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -45,7 +45,7 @@ function header(pdf: jsPDF, doc: ExportDocData, title: string, kind: 'invoice' |
   pdf.setFont('helvetica', 'bold'); pdf.setFontSize(16); pdf.text(title, M, y + 6);
   y += 8;
   if (kind === 'invoice') {
-    pdf.setFontSize(7.5); pdf.text('** SUPPLY MEANT FOR EXPORT UPON PAYMENT OF INTEGRATED TAX **', M, y + 3);
+    pdf.setFontSize(7.5); pdf.text(pdf.splitTextToSize(invoiceBanner(doc), W), M, y + 3);
     y += 5;
   }
   const half = W / 2;
@@ -117,16 +117,17 @@ const PACKING_COLS: ColStyles = {
 
 export function buildInvoicePdf(doc: ExportDocData): jsPDF {
   const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' }) as Doc;
-  const startY = header(pdf, doc, 'INVOICE', 'invoice');
+  const cur = doc.currency || 'USD';
+  const startY = header(pdf, doc, doc.isDraft ? 'DRAFT INVOICE' : 'INVOICE', 'invoice');
   const t = invoiceTotals(doc);
   autoTable(pdf, {
     ...tableStyles,
     startY,
-    head: [['Product Code', 'Description of Goods', 'HSN CODE', 'Unit Quantity', 'UOM', 'FOB Price USD', 'FOB Value USD', 'IGST Rate %', 'FOB Value INR', 'FOB IGST INR', 'Invoice Value INR', 'Invoice Value USD']],
+    head: [['Product Code', 'Description of Goods', 'HSN CODE', 'Unit Quantity', 'UOM', `FOB Price ${cur}`, `FOB Value ${cur}`, 'IGST Rate %', 'FOB Value INR', 'FOB IGST INR', 'Invoice Value INR', `Invoice Value ${cur}`]],
     body: doc.lines.map(l => {
-      const c = invoiceLine(l, doc.exchangeRate);
+      const c = invoiceLine(l, doc.exchangeRate, doc.taxMode);
       return [l.sku, l.description, l.hsnCode, qty(l.quantity), l.uom, money(l.fobPriceUsd), money(c.fobValueUsd),
-        `${qty(l.igstRatePct)}%`, money(c.fobValueInr), money(c.fobIgstInr), money(c.invoiceValueInr), money(c.invoiceValueUsd)];
+        `${qty(igstPct(l, doc.taxMode))}%`, money(c.fobValueInr), money(c.fobIgstInr), money(c.invoiceValueInr), money(c.invoiceValueUsd)];
     }),
     foot: [['', 'Consignment Total', '', qty(t.quantity), '', '', money(t.fobValueUsd), '', money(t.fobValueInr), money(t.fobIgstInr), money(t.invoiceValueInr), money(t.invoiceValueUsd)]],
     columnStyles: INVOICE_COLS,
@@ -136,9 +137,9 @@ export function buildInvoicePdf(doc: ExportDocData): jsPDF {
   if (y > 150) { pdf.addPage(); y = M; }
 
   // Footer left
-  label(pdf, 'Total Invoice Amount in Words (USD)', M, y + 3);
-  value(pdf, usdInWords(t.invoiceValueUsd), M, y + 7.5, { bold: true, maxW: 140 });
-  label(pdf, 'Exchange Rate (INR/USD)', M, y + 14); value(pdf, String(doc.exchangeRate), M + 38, y + 14);
+  label(pdf, `Total Invoice Amount in Words (${cur})`, M, y + 3);
+  value(pdf, amountInWords(t.invoiceValueUsd, cur), M, y + 7.5, { bold: true, maxW: 140 });
+  label(pdf, `Exchange Rate (INR/${cur})`, M, y + 14); value(pdf, String(doc.exchangeRate), M + 38, y + 14);
   label(pdf, 'As per Notification No.', M, y + 18.5); value(pdf, doc.notificationNo, M + 38, y + 18.5);
   label(pdf, 'Shippers Declaration', M, y + 25);
   value(pdf, 'We declare that invoice shows the actual price of goods described and that all particulars are true & correct.', M, y + 29, { maxW: 140, size: 7.5 });
@@ -157,7 +158,7 @@ export function buildInvoicePdf(doc: ExportDocData): jsPDF {
     ['Shipping', money(doc.exchangeRate ? t.shippingInr / doc.exchangeRate : 0)],
     ['Total Invoice IGST (INR)', money(t.totalIgstInr)],
     ['Total Invoice Value (INR)', money(t.invoiceValueInr)],
-    ['Total Invoice Value', `USD ${money(t.invoiceValueUsd)}`],
+    ['Total Invoice Value', `${cur} ${money(t.invoiceValueUsd)}`],
   ];
   autoTable(pdf, {
     ...tableStyles,
@@ -173,14 +174,14 @@ export function buildInvoicePdf(doc: ExportDocData): jsPDF {
 
 export function buildPackingPdf(doc: ExportDocData): jsPDF {
   const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' }) as Doc;
-  const startY = header(pdf, doc, 'Packing List', 'packing');
-  const calc = packingLines(doc.lines);
-  const t = packingTotals(doc.lines);
+  const startY = header(pdf, doc, doc.isDraft ? 'DRAFT Packing List' : 'Packing List', 'packing');
+  const calc = packingLines(doc.packing);
+  const t = packingTotals(doc.packing);
   autoTable(pdf, {
     ...tableStyles,
     startY,
     head: [['Case & Carton Number', 'Product Code', 'Description of Goods', 'Unit Quantity', 'Units Per Package', 'Dimensions of Package (in)', 'Kind of Package & Number of Packages', 'Net Weight of Package (Kg)', 'Gross Weight of Package (Kg)', 'Measurement of Package (m3)']],
-    body: doc.lines.map((l, i) => {
+    body: doc.packing.map((l, i) => {
       const c = calc[i];
       return [c.cartonRange, l.sku, l.description, qty(l.quantity), l.unitsPerPackage ? qty(l.unitsPerPackage) : '', l.packageDims,
         c.packages ? `${l.packageKind} x ${c.packages}` : l.packageKind, l.netWeightKg ? money(l.netWeightKg) : '', l.grossWeightKg ? money(l.grossWeightKg) : '',
