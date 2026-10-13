@@ -110,3 +110,16 @@ CREATE TABLE IF NOT EXISTS inward_remittances (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS inward_remittances_no_idx ON inward_remittances (remittance_no) WHERE remittance_no IS NOT NULL AND remittance_no <> '';
+
+-- How much of each inward remittance is used against each invoice (HDFC regularization letter).
+-- One row per remittance + invoice; the unused balance is the remittance amount minus these rows.
+CREATE TABLE IF NOT EXISTS remittance_allocations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  remittance_id uuid NOT NULL REFERENCES inward_remittances(id) ON DELETE CASCADE,
+  invoice_no text NOT NULL,
+  amount numeric NOT NULL CHECK (amount > 0),
+  updated_by text,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (remittance_id, invoice_no)
+);
+CREATE INDEX IF NOT EXISTS remittance_allocations_invoice_idx ON remittance_allocations (invoice_no);

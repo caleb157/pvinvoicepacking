@@ -7,6 +7,7 @@ import {
   Save, Search, Tag, Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { HdfcLetter } from '@/components/HdfcLetter';
 import { Field, PartyEditor } from '@/components/PartyEditor';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -639,6 +640,16 @@ export default function Editor({ settings }: { settings: AppSettings | null }) {
               </div>
             </CardContent>
           </Card>
+
+          {!doc.isDraft && (
+            <Card>
+              <CardHeader className="pb-2"><CardTitle className="text-sm">HDFC export regularization letter</CardTitle></CardHeader>
+              <CardContent>
+                <HdfcLetter doc={doc} patch={patch} adCode={settings?.adCode || ''} sig={sig}
+                  onDownload={async (blob, name) => { download(blob, name); await save(clean(doc), true); }} />
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
     </div>

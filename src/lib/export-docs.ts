@@ -91,6 +91,16 @@ export interface ExportDocData {
   incoterm?: string;             // "FOB" (from Odoo), for the Export Value Declaration
   paymentTerms?: string;         // Odoo payment terms, for the Export Value Declaration
   woodSpecies?: string[];        // for the Wooden Declaration, e.g. ['Mango', 'Acacia']
+  hdfc?: HdfcInputs;             // typed parts of the HDFC export regularization letter
+}
+
+export interface HdfcInputs {
+  letterDate: string;            // YYYY-MM-DD
+  purposeCode: string;           // e.g. "P0103 - Advance receipts against export contracts"
+  exportType: 'REGULAR' | 'WAREHOUSE' | 'PROJECT EXPORT';
+  lcNo: string; lcDate: string; lcAmount: string; issuingBank: string; tenor: string;
+  documentsAgainst: string;
+  remark: string;
 }
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;

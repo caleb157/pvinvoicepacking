@@ -7,6 +7,7 @@ import boldUrl from '@/assets/montserrat-bold.ttf?url';
 import regularUrl from '@/assets/montserrat-regular.ttf?url';
 import logoUrl from '@/assets/pv-logo.png?url';
 import { ExportDocData } from './export-docs';
+import { DECLARATIONS, HDFC, RemitRow, dateOfExport, defaultHdfc, hdfcDate, sbRows, utilisation } from './hdfc';
 import { LETTERHEAD, evdTerms, isRelatedBuyer, labelData, letterDate, nonDgRows, woodText } from './letters';
 
 export interface Signatory { name: string; title: string }
@@ -194,3 +195,110 @@ export async function labelsPdf(doc: ExportDocData): Promise<Blob> {
   });
   return pdf.output('blob');
 }
+
+// ---------- HDFC export regularization letter ----------
+
+export interface HdfcExtras { bills: Record<string, unknown>[]; remits: RemitRow[]; adCode: string; sig: Signatory }
+
+export async function hdfcPdf(doc: ExportDocData, x: HdfcExtras): Promise<Blob> {
+  const { pdf, logo } = await newPdf('a4');
+  const h = doc.hdfc ?? defaultHdfc('');
+  const bottom = PH - 30;
+  let y = letterhead(pdf, logo);
+  const room = (need: number) => { if (y + need > bottom) { pdf.addPage(); y = 20; } };
+  const table = (body: (string | number)[][], opts: { head?: string[]; widths?: Record<number, number>; boldFirst?: boolean } = {}) => {
+    autoTable(pdf, {
+      startY: y, margin: { left: LM, right: RM, bottom: 32 }, theme: 'grid',
+      styles: { font: F, fontSize: 8.5, cellPadding: 1.4, lineColor: 160, lineWidth: 0.15, textColor: 0, valign: 'top' },
+      headStyles: { fillColor: [235, 235, 235], textColor: 0, fontStyle: 'bold' },
+      columnStyles: Object.fromEntries(Object.entries(opts.widths ?? {}).map(([k, w]) => [k, { cellWidth: w, ...(opts.boldFirst && k === '0' ? { fontStyle: 'bold' } : {}) }])),
+      head: opts.head ? [opts.head] : undefined, body: body.map(r => r.map(String)),
+    });
+    y = (pdf as any).lastAutoTable.finalY + 4;
+  };
+  const text = (t: string, opts: { bold?: boolean; size?: number } = {}) => {
+    pdf.setFont(F, opts.bold ? 'bold' : 'normal'); pdf.setFontSize(opts.size ?? 8.5);
+    const lines = pdf.splitTextToSize(t, TW);
+    const lh = (opts.size ?? 8.5) * 0.45;
+    room(lines.length * lh + 2);
+    pdf.text(lines, LM, y);
+    y += lines.length * lh + 2.5;
+  };
+
+  text('REQUEST LETTER FOR EXPORT OF GOODS (COLLECTION/DISCOUNTING & REGULARISATION)', { bold: true, size: 10.5 });
+  y += 1;
+  pdf.setFont(F, 'normal'); pdf.setFontSize(9);
+  pdf.text(['To,', ...HDFC.bank], LM, y);
+  pdf.text(`Date: ${hdfcDate(h.letterDate)}`, PW - RM, y, { align: 'right' });
+  y += 16;
+
+  const total = utilisation(doc, x.remits).invoiceValue;
+  const W1 = 70;
+  table([
+    ['Account no to be credited', HDFC.account],
+    ['Purpose Code & Details', h.purposeCode],
+    ['Exchange Rate / Forward Contract details if any', ''],
+    ['Date of Export / Expected date of Service of Advance', hdfcDate(dateOfExport(x.bills))],
+    ['Country of Dispatch', 'INDIA'],
+    ['Country of Destination', doc.countryOfFinalDestination],
+    ['Invoice No / Dated', `${doc.invoiceNo}   dated ${hdfcDate(doc.invoiceDate)}`],
+    ['Type of Export', h.exportType],
+    ['Date of Export / Sale (Warehouse) / Completion (Project Export)', hdfcDate(dateOfExport(x.bills))],
+  ], { widths: { 0: W1 }, boldFirst: true });
+
+  text('Please find enclosed Export Documents under Collection / Letter of Credit:', { bold: true });
+  table([
+    ['Letter of Credit No', h.lcNo, 'Dated', hdfcDate(h.lcDate)],
+    ['Letter of Credit Amount', h.lcAmount, 'Issuing Bank', h.issuingBank],
+    ['Currency and Amount', `${doc.currency} ${total.toLocaleString('en-US', { minimumFractionDigits: 2 })}`, 'Tenor', h.tenor],
+    ['Drawee / Buyer', (doc.buyer ?? doc.consignee).name, 'Documents to be delivered against', h.documentsAgainst],
+  ], { widths: { 0: 42, 2: 38 }, boldFirst: true });
+
+  text('Please utilize the below Forward Contract for disbursal:', { bold: true });
+  table([['', '', '', '']], { head: ['Forward Cover No & Date', 'Forward Cover Rate', 'Amount to be utilized for this transaction', 'Due Date of the Contract'] });
+
+  text('Number of documents submitted in TWO sets for Collection or as per LC Terms', { bold: true });
+  table([['Original', '', '', '', '', '', '', ''], ['Duplicate', '', '', '', '', '', '', '']],
+    { head: ['Documents', 'Drafts', 'Invoice', 'Transport Doc. (B/L / AWB / LR)', 'Packing List', 'Insurance', 'Certificate of Origin', 'Others'] });
+
+  text('We hereby request bank to discount the bill by way of Earmarking/Using Interchangeability of available Limit <Please write name of the facility>.');
+  text('We request you to send the documents on approval basis with discrepancies.');
+  text('Please forward the documents in one lot by courier at our cost, risk and responsibility to below address');
+  text('Bank Swift Code: ______________  (Mandatory in case the documents are being sent to a bank)');
+
+  const sb = sbRows(x.bills, x.adCode);
+  table((sb.length ? sb : [{ sbNo: '', date: '', portCode: '', adCode: x.adCode, shipmentDate: '' }])
+    .map(r => [r.sbNo, hdfcDate(r.date), r.portCode, r.adCode, hdfcDate(r.shipmentDate)]),
+  { head: ['GR / Shipping Bill / Softex No', 'Date', 'Port Code', 'AD Code', 'Shipment Date'] });
+
+  text(`Debit all processing charges from account no: ${HDFC.account}`);
+  text(`In case of any queries please contact us on Tel. No ${HDFC.tel} or email us at ${HDFC.email}`);
+  text(DECLARATIONS.packingCredit);
+  text('PROCEEDS DISPOSAL INSTRUCTIONS: Upon realization of funds, please credit proceeds to (Please tick any one).', { bold: true });
+  text('[  ] 100% to be converted and credited to Current account / CC Account');
+  text('[  ] ____% to be credited to EEFC account no. ____________ and balance to be converted and credited to Current account / CC Account no ____________');
+  text('[  ] PCFC / EPC to be adjusted (PCFC/EPC no ____________ )');
+  text(DECLARATIONS.ofac);
+  text(DECLARATIONS.fema);
+  DECLARATIONS.terms.forEach(t => text(t));
+  text(DECLARATIONS.eligible);
+  text(`Our Importer Exporter Code is: ${doc.exporterRef}`);
+  DECLARATIONS.disclaimers.forEach((t, i) => text(t, { bold: i === 0 }));
+  text(`Remark: ${h.remark}`);
+
+  const cur = doc.currency || 'USD';
+  table(x.remits.length ? x.remits.map(r => [r.remittanceNo, hdfcDate(r.date), money2(r.total), money2(r.amount)]) : [['', '', '', '']],
+    { head: ['Inward Remittance Number', 'Inward Remittance Date', `Total Amount ${cur}`, `Amount to be Utilized ${cur}`] });
+
+  room(40);
+  y += 4;
+  pdf.setFont(F, 'bold'); pdf.setFontSize(9.5);
+  pdf.text(`For ${doc.shipper.name || 'Parable Ventures Private Limited'}`, LM, y);
+  y += 22;
+  pdf.setLineWidth(0.3); pdf.line(LM, y, LM + 70, y);
+  pdf.setFont(F, 'normal'); pdf.setFontSize(8.5);
+  pdf.text(['AUTHORISED SIGNATORY', '(Signature as per Bank record with company seal)', x.sig.name ? `${x.sig.name}, ${x.sig.title}` : ''], LM, y + 4.5);
+  return pdf.output('blob');
+}
+
+const money2 = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });

@@ -151,6 +151,11 @@ export const updateRow = (table: TrackerTable, id: string, row: Record<string, u
   call<{ row: TrackerRow }>('/api/tracker', { action: 'update', table, id, row }).then(r => r.row);
 export const deleteRow = (table: TrackerTable, id: string) => call('/api/tracker', { action: 'delete', table, id });
 
+export interface Allocation { remittance_id: string; invoice_no: string; amount: number }
+export const listAllocations = () => call<{ allocations: Allocation[] }>('/api/tracker', { action: 'allocations' }).then(r => r.allocations);
+export const setAllocations = (invoiceNo: string, items: { remittance_id: string; amount: number }[]) =>
+  call<{ allocations: Allocation[] }>('/api/tracker', { action: 'set-allocations', invoice_no: invoiceNo, items }).then(r => r.allocations);
+
 // ---------- building the document from Odoo ----------
 
 export function shipperFromCompany(c: OdooPartner | null, contact: string) {

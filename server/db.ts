@@ -160,3 +160,31 @@ export async function updateRow(table: TrackerTable, id: string, row: Record<str
 export async function deleteRow(table: TrackerTable, id: string) {
   await sql().query(`delete from ${table} where id = $1`, [id]);
 }
+
+// ---------- remittance allocations (amount of a remittance used against an invoice) ----------
+
+export async function listAllocations() {
+  return rowsOf(await sql()`select remittance_id, invoice_no, amount::float8 as amount from remittance_allocations order by invoice_no`);
+}
+
+/** Replaces this invoice's allocations; refuses to use more of a remittance than it has left. */
+export async function setAllocations(invoiceNo: string, items: { remittance_id: string; amount: number }[], by: string) {
+  const ids = [...new Set(items.map(i => i.remittance_id))];
+  if (ids.length !== items.length) throw new Error('A remittance is listed twice.');
+  if (ids.length) {
+    const rows = rowsOf(await sql()`select r.id, r.remittance_no, coalesce(r.fcy_amount, 0)::float8 as total,
+        coalesce((select sum(a.amount) from remittance_allocations a where a.remittance_id = r.id and a.invoice_no <> ${invoiceNo}), 0)::float8 as used
+      from inward_remittances r where r.id = any(${ids})`);
+    for (const i of items) {
+      const r = rows.find(x => x.id === i.remittance_id);
+      if (!r) throw new Error('A picked remittance no longer exists.');
+      if (i.amount > r.total - r.used + 0.005) {
+        throw new Error(`${r.remittance_no || 'A remittance'} only has ${Math.max(0, r.total - r.used).toFixed(2)} left (the rest is used on other invoices).`);
+      }
+    }
+  }
+  await sql()`delete from remittance_allocations where invoice_no = ${invoiceNo}`;
+  for (const i of items) {
+    await sql()`insert into remittance_allocations (remittance_id, invoice_no, amount, updated_by) values (${i.remittance_id}, ${invoiceNo}, ${i.amount}, ${by})`;
+  }
+}

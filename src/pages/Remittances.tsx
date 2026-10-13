@@ -1,12 +1,12 @@
 // Inward remittances: one row per HDFC inward remittance, edited in place. "Read PDF" fills a
 // new row from the bank's Certificate of Foreign Inward Remittance (no AI: fixed layout).
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { FileUp, Loader2, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { Col, TrackerGrid, useRows } from '@/components/TrackerGrid';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { insertRow, listRows } from '@/lib/export-docs-data';
+import { Allocation, insertRow, listAllocations, listRows } from '@/lib/export-docs-data';
 
 const COLS: Col[] = [
   { key: 'remittance_no', label: 'Remittance No.', kind: 'text', width: 'min-w-[140px]' },
@@ -15,14 +15,32 @@ const COLS: Col[] = [
   { key: 'fcy_amount', label: 'FCY Amount', kind: 'num', width: 'min-w-[100px]', total: true },
   { key: 'exchange_rate', label: 'Exch. Rate', kind: 'num', width: 'min-w-[80px]' },
   { key: 'inr_amount', label: 'INR Amount', kind: 'num', width: 'min-w-[110px]', total: true },
+  { key: 'used', label: 'Used on invoices', kind: 'computed' },
   { key: 'remitter', label: 'Remitter', kind: 'text', width: 'min-w-[220px]' },
   { key: 'remitting_bank', label: 'Remitting Bank', kind: 'text', width: 'min-w-[160px]' },
   { key: 'purpose_code', label: 'Purpose', kind: 'text', width: 'w-20' },
   { key: 'comments', label: 'Comments', kind: 'text', width: 'min-w-[200px]' },
 ];
 
+const fmt = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
 export default function Remittances() {
   const { rows, setRows, error } = useRows(() => listRows('inward_remittances'));
+  const [allocs, setAllocs] = useState<Allocation[]>([]);
+  useEffect(() => { listAllocations().then(setAllocs).catch(() => { /* table not set up yet */ }); }, []);
+  const cols = useMemo(() => COLS.map(c => (c.key !== 'used' ? c : {
+    ...c, render: (r: Record<string, unknown>) => {
+      const mine = allocs.filter(a => a.remittance_id === r.id);
+      if (!mine.length) return <span className="text-muted-foreground">unused</span>;
+      const used = mine.reduce((t, a) => t + a.amount, 0);
+      const left = Number(r.fcy_amount || 0) - used;
+      return (
+        <span title={mine.map(a => `${a.invoice_no}: ${fmt(a.amount)}`).join('\n')}>
+          {mine.map(a => a.invoice_no).join(', ')} · <span className={left > 0.005 ? 'text-warning' : 'text-muted-foreground'}>{left > 0.005 ? `${fmt(left)} left` : 'fully used'}</span>
+        </span>
+      );
+    },
+  })), [allocs]);
   const [busy, setBusy] = useState(false);
   const [q, setQ] = useState('');
   const file = useRef<HTMLInputElement>(null);
@@ -73,7 +91,7 @@ export default function Remittances() {
       </div>
       {error && <div className="rounded-md border border-warning/50 bg-warning/10 p-3 text-sm">{error}</div>}
       {!rows && !error && <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />}
-      {rows && <TrackerGrid table="inward_remittances" cols={COLS} rows={shown} setRows={setRows} />}
+      {rows && <TrackerGrid table="inward_remittances" cols={cols} rows={shown} setRows={setRows} />}
       <p className="text-[11px] text-muted-foreground">
         Cells save when you leave them. PDFs are read in your browser from HDFC's inward remittance certificate layout; anything it can't find is left blank.
       </p>
