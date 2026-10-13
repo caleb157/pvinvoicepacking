@@ -106,7 +106,7 @@ export async function nonDgPdf(doc: ExportDocData, sig: Signatory): Promise<Blob
 
 // ---------- Export Value Declaration ----------
 
-const tick = (on: boolean) => (on ? '( YES )' : '(        )');
+const tick = (on: boolean) => (on ? '(  X  )' : '(       )');
 
 export async function evdPdf(doc: ExportDocData, sig: Signatory): Promise<Blob> {
   const { pdf, logo } = await newPdf('a4');
@@ -187,8 +187,8 @@ export async function labelsPdf(doc: ExportDocData): Promise<Blob> {
     ];
     autoTable(pdf, {
       startY: M + 30, margin: { left: M + 5, right: M + 5 }, theme: 'grid',
-      styles: { font: F, fontSize: 13, cellPadding: 1.8, lineColor: 120, lineWidth: 0.2, textColor: 0 },
-      columnStyles: { 0: { cellWidth: 58, fontSize: 10, textColor: 80 }, 1: { fontStyle: 'bold' } },
+      styles: { font: F, fontSize: 15, cellPadding: 2.4, lineColor: 120, lineWidth: 0.2, textColor: 0 },
+      columnStyles: { 0: { cellWidth: 58, fontSize: 11, textColor: 80 }, 1: { fontStyle: 'bold' } },
       body: rows,
     });
   });
